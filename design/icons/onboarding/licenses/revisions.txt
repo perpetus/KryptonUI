@@ -1,0 +1,2 @@
+simple-icons: 90646e4bf7f3b89df6c37e65baf3e7bc759a517c
+svgl: c0ec7ab121354ac1096b17b3aebbb293c8ce5600

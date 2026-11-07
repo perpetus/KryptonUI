@@ -1,0 +1,64 @@
+[
+  {
+    "title": "Baidu",
+    "hex": "2932E1",
+    "source": "https://www.baidu.com"
+  },
+  {
+    "title": "Ecosia",
+    "hex": "008009",
+    "source": "https://www.ecosia.org/imprint",
+    "guidelines": "https://www.ecosia.org/imprint"
+  },
+  {
+    "title": "Kagi",
+    "hex": "FFB319",
+    "source": "https://kagi.com"
+  },
+  {
+    "title": "Naver",
+    "hex": "03C75A",
+    "source": "https://developers.naver.com/docs/login/bi/bi.md",
+    "guidelines": "https://developers.naver.com/docs/login/bi/bi.md",
+    "aliases": {
+      "loc": {
+        "ja-JP": "ネイバー",
+        "ko-KR": "네이버"
+      }
+    }
+  },
+  {
+    "title": "Perplexity",
+    "hex": "1FB8CD",
+    "source": "https://www.perplexity.ai"
+  },
+  {
+    "title": "Qwant",
+    "hex": "282B2F",
+    "source": "https://about.qwant.com"
+  },
+  {
+    "title": "Startpage",
+    "hex": "6563FF",
+    "source": "https://startpage.com/en/about-us"
+  },
+  {
+    "title": "Tor Browser",
+    "hex": "7D4698",
+    "source": "https://styleguide.torproject.org/brand-assets"
+  },
+  {
+    "title": "Vivaldi",
+    "hex": "EF3939",
+    "source": "https://vivaldi.com/press",
+    "guidelines": "https://vivaldi.com/press",
+    "license": {
+      "type": "CC-BY-4.0"
+    }
+  },
+  {
+    "title": "Wikipedia",
+    "hex": "000000",
+    "source": "https://commons.wikimedia.org/wiki/File:Wikipedia-logo-v2.svg"
+  }
+]

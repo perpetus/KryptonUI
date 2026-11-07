@@ -1,0 +1,45 @@
+/out/
+/.deps/
+/build/
+/.vs/
+/.vscode/
+/.idea/
+CMakeUserPresets.json
+*.user
+__pycache__/
+# Reference checkouts are local research inputs, except the retained submodules.
+/reference/*
+!/reference/helium-windows/
+!/reference/WinUI-Gallery/
+
+# Local agent configuration, reports and machine-specific data.
+/.agents/
+/.codex/
+/.t3/
+/.serena/
+/.env
+/.env.*
+!/.env.example
+*.pdb
+*.obj
+*.ilk
+*.ipdb
+*.iobj
+*.dmp
+*.dump
+*.log
+*.pfx
+*.p12
+*-private.key
+*private*.pem
+
+# Internal documentation stays local; public legal notices remain included.
+/docs/
+*.md
+!/README.md
+!/CREDITS.md
+!/THIRD_PARTY_NOTICES.md
+!**/NOTICE.md
+!**/*NOTICE*.md
+!**/LICENSE.md
+!**/COPYING.md

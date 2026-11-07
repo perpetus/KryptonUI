@@ -1,0 +1,4 @@
+BasedOnStyle: Chromium
+Standard: Latest
+ColumnLimit: 80
+IncludeBlocks: Regroup

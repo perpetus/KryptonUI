@@ -1,0 +1,6 @@
+[submodule "reference/WinUI-Gallery"]
+	path = reference/WinUI-Gallery
+	url = https://github.com/microsoft/WinUI-Gallery.git
+[submodule "reference/helium-windows"]
+	path = reference/helium-windows
+	url = https://github.com/imputnet/helium-windows.git
