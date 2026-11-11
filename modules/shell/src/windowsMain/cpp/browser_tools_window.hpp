@@ -20,6 +20,10 @@ class BrowserToolWindow {
   BrowserToolWindow(HWND owner, ViewContext& context, bool tasks);
   ~BrowserToolWindow();
   void Render(const ShellViewModel& vm);
+  [[nodiscard]] bool OwnsInput() const noexcept {
+    return visible_ && (GetForegroundWindow() == input_target_.Window() ||
+                        input_target_.Owns(GetFocus()));
+  }
 
  private:
   struct Row;

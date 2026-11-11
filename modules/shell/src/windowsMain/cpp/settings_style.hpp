@@ -1,5 +1,7 @@
 #pragma once
 
+#include <winrt/Windows.UI.Xaml.Interop.h>
+
 #include "view_context.hpp"
 
 namespace kr::win {
@@ -7,6 +9,7 @@ namespace kr::win {
 // Updating these brushes also updates existing cards without rebuilding them.
 struct SettingsStyle {
   media::SolidColorBrush background, surface, border, text, secondary;
+  media::SolidColorBrush toggle_fill, toggle_thumb;
 
   void Apply(const ThemeVm& theme, const Brushes& system) const {
     const auto& palette =
@@ -26,6 +29,51 @@ struct SettingsStyle {
                        : NativeColor(Color{palette.foreground}));
     set(secondary, contrast ? system.muted.Color()
                             : NativeColor(Color{palette.secondary}));
+    set(toggle_fill, contrast
+                         ? system.active.Color()
+                         : NativeColor(Color{kTokens.settings.toggle_cyan}));
+    set(toggle_thumb,
+        contrast ? system.text.Color()
+                 : NativeColor(Color{kTokens.settings.accent_dark_text}));
+  }
+  void Dropdown(const controls::ComboBox& control) const {
+    control.Width(kTokens.settings.dropdown_width);
+    control.MaxDropDownHeight(kTokens.settings.dropdown_max_height);
+    control.HorizontalAlignment(xaml::HorizontalAlignment::Right);
+    xaml::Style items{winrt::xaml_typename<controls::ComboBoxItem>()};
+    items.Setters().Append(xaml::Setter(
+        xaml::FrameworkElement::MaxWidthProperty(),
+        winrt::box_value(
+            static_cast<double>(kTokens.settings.dropdown_width))));
+    control.ItemContainerStyle(items);
+  }
+  [[nodiscard]] controls::Viewbox Toggle(
+      const controls::ToggleSwitch& control) const {
+    control.OnContent(nullptr);
+    control.OffContent(nullptr);
+    // The native template otherwise reserves 154 DIPs for its state labels.
+    // Keep its thumb, capture, keyboarding and compositor animations intact.
+    control.MinWidth(0);
+    control.Width(kTokens.settings.toggle_template_width);
+    control.Height(kTokens.settings.toggle_template_height);
+    control.HorizontalAlignment(xaml::HorizontalAlignment::Right);
+    control.VerticalAlignment(xaml::VerticalAlignment::Center);
+    for (const auto key :
+         {L"ToggleSwitchFillOn", L"ToggleSwitchFillOnPointerOver",
+          L"ToggleSwitchFillOnPressed", L"ToggleSwitchStrokeOn",
+          L"ToggleSwitchStrokeOnPointerOver", L"ToggleSwitchStrokeOnPressed"})
+      control.Resources().Insert(winrt::box_value(key), toggle_fill);
+    for (const auto key :
+         {L"ToggleSwitchKnobFillOn", L"ToggleSwitchKnobFillOnPointerOver",
+          L"ToggleSwitchKnobFillOnPressed"})
+      control.Resources().Insert(winrt::box_value(key), toggle_thumb);
+    controls::Viewbox box;
+    box.Width(kTokens.settings.toggle_width);
+    box.Height(kTokens.settings.toggle_height);
+    box.HorizontalAlignment(xaml::HorizontalAlignment::Right);
+    box.VerticalAlignment(xaml::VerticalAlignment::Center);
+    box.Child(control);
+    return box;
   }
 
   [[nodiscard]] controls::Border Card(const xaml::UIElement& content) const {

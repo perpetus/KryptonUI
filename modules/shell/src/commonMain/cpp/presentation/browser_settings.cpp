@@ -120,6 +120,8 @@ std::span<const SettingsEntry> SettingsEntries() noexcept {
        UiText::kSettingsAppearanceHelp, SettingsEntryKind::kAppearance},
       {SettingsSection::kAppearance, UiText::kSettingsSearchBarMenuBackdrop,
        UiText::kSettingsMenuHelp, SettingsEntryKind::kAppearance},
+      {SettingsSection::kAppearance, UiText::kSettingsNewTabBehavior,
+       UiText::kSettingsAppearanceHelp, SettingsEntryKind::kAppearance},
       {SettingsSection::kAppearance, UiText::kSettingsMinimalAddress,
        UiText::kSettingsAppearanceHelp, SettingsEntryKind::kLayout},
       {SettingsSection::kAppearance, UiText::kSettingsRoundedFrame,

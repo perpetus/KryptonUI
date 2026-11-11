@@ -75,6 +75,7 @@ BrowserSettingsPanel::Row& BrowserSettingsPanel::Build(
     case SettingsEntryKind::kStartup:
     case SettingsEntryKind::kSearch:
       r.choice = controls::ComboBox();
+      style_.Dropdown(r.choice);
       r.control = r.choice;
       r.selected = r.choice.SelectionChanged(
           winrt::auto_revoke, [this, ptr = &r](auto&&, auto&&) {
@@ -91,9 +92,7 @@ BrowserSettingsPanel::Row& BrowserSettingsPanel::Build(
     case SettingsEntryKind::kAskDownload:
     case SettingsEntryKind::kWorkspaceSwipe:
       r.toggle = controls::ToggleSwitch();
-      r.toggle.OnContent(winrt::box_value(L""));
-      r.toggle.OffContent(winrt::box_value(L""));
-      r.control = r.toggle;
+      r.control = style_.Toggle(r.toggle);
       r.toggled = r.toggle.Toggled(
           winrt::auto_revoke, [this, ptr = &r](auto&&, auto&&) {
             if (reconciling_)
@@ -148,6 +147,8 @@ BrowserSettingsPanel::Row& BrowserSettingsPanel::Build(
   }
   controls::Grid::SetColumn(r.control, 1);
   xaml::Automation::AutomationProperties::SetLabeledBy(r.control, r.title);
+  if (r.toggle)
+    xaml::Automation::AutomationProperties::SetLabeledBy(r.toggle, r.title);
   r.grid.Children().Append(r.control);
   if (entry.kind == SettingsEntryKind::kWorkspaces) {
     controls::Grid::SetRow(workspaces_, 2);
@@ -560,6 +561,8 @@ bool BrowserSettingsPanel::Focus(UiText label) {
       found->second->grid.Visibility() != xaml::Visibility::Visible)
     return false;
   found->second->grid.StartBringIntoView();
-  return found->second->control.Focus(xaml::FocusState::Programmatic);
+  const auto& row = *found->second;
+  return row.toggle ? row.toggle.Focus(xaml::FocusState::Programmatic)
+                    : row.control.Focus(xaml::FocusState::Programmatic);
 }
 }  // namespace kr::win

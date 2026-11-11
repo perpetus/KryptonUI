@@ -42,4 +42,8 @@ void Store::SelectSettingsSection(SettingsSection section) {
   ui_.settings.section = section;
   MarkDirty(Dirty::kSettings);
 }
+void Store::ToggleSettingsNavigation() {
+  ui_.settings.navigation_collapsed = !ui_.settings.navigation_collapsed;
+  MarkDirty(Dirty::kSettings);
+}
 }  // namespace kr

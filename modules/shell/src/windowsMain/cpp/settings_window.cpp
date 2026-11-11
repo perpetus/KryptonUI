@@ -19,6 +19,10 @@ SettingsWindow::~SettingsWindow() {
   lifetime_.reset();
   activated_.revoke();
   selected_.revoke();
+  double_tapped_.clear();
+  pane_opened_.revoke();
+  pane_closed_.revoke();
+  display_changed_.revoke();
   key_.revoke();
   fallback_key_.revoke();
   searched_.revoke();
@@ -59,6 +63,7 @@ void SettingsWindow::Build() {
       controls::NavigationViewBackButtonVisible::Collapsed);
   navigation_.PaneDisplayMode(controls::NavigationViewPaneDisplayMode::Auto);
   navigation_.OpenPaneLength(kTokens.settings.navigation_width);
+  navigation_.CompactPaneLength(kTokens.settings.navigation_compact_width);
   navigation_.ExpandedModeThresholdWidth(kTokens.settings.expanded_threshold);
   navigation_.CompactModeThresholdWidth(kTokens.settings.compact_threshold);
   navigation_.IsTitleBarAutoPaddingEnabled(false);
@@ -79,7 +84,7 @@ void SettingsWindow::Build() {
   for (const auto key :
        {L"AccentFillColorDefaultBrush", L"AccentFillColorSecondaryBrush",
         L"AccentFillColorTertiaryBrush", L"SystemControlHighlightAccentBrush",
-        L"NavigationViewSelectionIndicatorForeground", L"ToggleSwitchFillOn",
+        L"NavigationViewSelectionIndicatorForeground",
         L"RadioButtonForegroundChecked", L"ComboBoxBorderBrushFocused",
         L"TextControlBorderBrushFocused"})
     root_.Resources().Insert(winrt::box_value(key), accent_);
@@ -163,6 +168,7 @@ void SettingsWindow::Build() {
   scroll_.VerticalScrollBarVisibility(controls::ScrollBarVisibility::Auto);
   scroll_.Content(content_);
   navigation_.Content(scroll_);
+  const std::weak_ptr<int> weak = lifetime_;
   for (const auto& section : SettingsSections()) {
     controls::NavigationViewItem item;
     item.MinHeight(kTokens.settings.navigation_item_height);
@@ -173,10 +179,18 @@ void SettingsWindow::Build() {
         media::FontFamily(winrt::to_hstring(kTokens.type.icon_family)));
     glyph.Glyph(winrt::hstring(section.glyph));
     glyph.FontSize(kTokens.settings.navigation_icon_size);
+    double_tapped_.push_back(item.DoubleTapped(
+        winrt::auto_revoke,
+        [this, weak](auto&&,
+                     const xaml::Input::DoubleTappedRoutedEventArgs& args) {
+          if (weak.expired() || !visible_)
+            return;
+          context_.delegate.OnSettingsNavigationToggled();
+          args.Handled(true);
+        }));
     navigation_.MenuItems().Append(item);
     items_.push_back(item);
   }
-  const std::weak_ptr<int> weak = lifetime_;
   activated_ = window_.Activated(
       winrt::auto_revoke,
       [this, weak](auto&&, const xaml::WindowActivatedEventArgs& args) {
@@ -241,6 +255,21 @@ void SettingsWindow::Build() {
   window_.Content(root_);
   window_.ExtendsContentIntoTitleBar(true);
   window_.SetTitleBar(title_bar_);
+  pane_opened_ =
+      navigation_.PaneOpened(winrt::auto_revoke, [this, weak](auto&&, auto&&) {
+        if (!weak.expired())
+          Backdrop();
+      });
+  pane_closed_ =
+      navigation_.PaneClosed(winrt::auto_revoke, [this, weak](auto&&, auto&&) {
+        if (!weak.expired())
+          Backdrop();
+      });
+  display_changed_ = navigation_.DisplayModeChanged(
+      winrt::auto_revoke, [this, weak](auto&&, auto&&) {
+        if (!weak.expired())
+          Backdrop();
+      });
   if (const auto presenter =
           app_window_.Presenter()
               .try_as<winrt::Microsoft::UI::Windowing::OverlappedPresenter>()) {
@@ -322,6 +351,16 @@ void SettingsWindow::Render(const ShellViewModel& vm) {
           : std::nullopt;
   theme_.workspace_theme = workspace_theme_ ? &*workspace_theme_ : nullptr;
   style_.Apply(vm.theme, context_.brushes);
+  if (navigation_collapsed_ != vm.settings.state.navigation_collapsed) {
+    navigation_collapsed_ = vm.settings.state.navigation_collapsed;
+    navigation_.PaneDisplayMode(
+        navigation_collapsed_
+            ? controls::NavigationViewPaneDisplayMode::LeftCompact
+            : controls::NavigationViewPaneDisplayMode::Auto);
+    navigation_.IsPaneOpen(!navigation_collapsed_ &&
+                           root_.ActualWidth() >=
+                               kTokens.settings.expanded_threshold);
+  }
   accent_.Color(context_.brushes.high_contrast()
                     ? context_.brushes.active.Color()
                     : NativeColor(vm.theme.accent));
@@ -485,8 +524,12 @@ void SettingsWindow::Backdrop() {
   backdrop_.Render(theme_, {0, 0, width, height}, {0, 0, width, height},
                    context_.brushes.high_contrast());
   if (width > 0) {
-    const bool expanded = width >= kTokens.settings.expanded_threshold;
+    const bool expanded = navigation_.DisplayMode() ==
+                              controls::NavigationViewDisplayMode::Expanded &&
+                          navigation_.IsPaneOpen();
     navigation_.IsPaneToggleButtonVisible(!expanded);
+    search_.Visibility(navigation_.IsPaneOpen() ? xaml::Visibility::Visible
+                                                : xaml::Visibility::Collapsed);
     const float padding = expanded ? kTokens.settings.page_padding
                                    : kTokens.settings.narrow_padding;
     const xaml::Thickness insets{padding, kTokens.settings.page_top_padding,

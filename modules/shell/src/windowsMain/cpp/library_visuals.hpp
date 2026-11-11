@@ -94,11 +94,19 @@ class DownloadEntry {
   controls::TextBlock title_, subtitle_;
   std::unique_ptr<NativeButton> action_;
   DownloadId id_;
-  bool can_cancel_ = false, can_show_ = false, hovered_ = false;
+  bool can_cancel_ = false, can_show_ = false, can_open_ = false,
+       hovered_ = false;
+  DownloadId pressed_, released_;
+  std::uint32_t pressed_pointer_ = 0;
   bool compact_ = false;
   winrt::hstring cancel_text_, show_text_;
   xaml::UIElement::PointerEntered_revoker entered_;
   xaml::UIElement::PointerExited_revoker exited_;
+  xaml::UIElement::PointerPressed_revoker pressed_event_;
+  xaml::UIElement::PointerReleased_revoker released_event_;
+  xaml::UIElement::PointerCanceled_revoker canceled_;
+  xaml::UIElement::PointerCaptureLost_revoker capture_lost_;
+  xaml::FrameworkElement::Unloaded_revoker unloaded_;
   xaml::UIElement::Tapped_revoker tapped_;
   xaml::UIElement::RightTapped_revoker context_menu_;
 };

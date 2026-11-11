@@ -11,6 +11,7 @@
 #include "krypton/ui/core/ids.hpp"
 #include "krypton/ui/model/browser_tools.hpp"
 #include "krypton/ui/model/model.hpp"
+#include "krypton/ui/model/tab_drop.hpp"
 #include "krypton/ui/model/workspace_swipe.hpp"
 #include "krypton/ui/platform/glass.hpp"
 #include "krypton/ui/presentation/multi_page.hpp"
@@ -84,6 +85,7 @@ class ShellViewDelegate {
       std::string_view glyph) = 0;
   virtual void OnWorkspaceEditorDismissed() = 0;
   virtual void OnSettingsSectionSelected(SettingsSection section) = 0;
+  virtual void OnSettingsNavigationToggled() {}
   virtual void OnAppearanceEdited(AppearanceEdit edit) = 0;
   [[nodiscard]] virtual bool CanRequestGlassBackdrop() const { return false; }
   virtual void OnGlassBackdropRequested(const GlassBackdropRequest&) {}
@@ -114,17 +116,18 @@ class ShellViewDelegate {
   virtual void OnClearTabs() = 0;
   virtual void OnTabMuteToggled(TabId tab) = 0;
   // A tab was dragged to sit directly before `next`, or directly after
-  // `previous` at the end of its list. `pinned` is the section it was dropped
-  // in, when the list shows sections. The native list already shows the drop.
+  // `previous` at the end of its list, in `section`. The neighbours belong to
+  // that section. The native list keeps its order until the host answers.
   virtual void OnTabDropped(TabId tab,
                             TabId previous,
                             TabId next,
-                            std::optional<bool> pinned) = 0;
+                            TabDropSection section) = 0;
   virtual void OnThemeEdited(const ThemeEdit& edit) = 0;
   virtual void OnThemeEditorDismissed() = 0;
   [[nodiscard]] virtual std::uint32_t OnTabPreviewRequested(TabId tab) = 0;
   virtual void OnTabPreviewDismissed(std::uint32_t request_id) = 0;
   virtual void OnNewTab() = 0;
+  virtual void OnUrlDropped(std::string_view url) = 0;
   virtual void OnSpaceSelected(SpaceId space) = 0;
   [[nodiscard]] virtual bool OnWorkspaceSwipe(WorkspaceSwipeInput input) = 0;
   virtual void OnNavCommand(NavCommand command) = 0;
@@ -210,6 +213,7 @@ class ShellView {
   // keyed by id and update only what changed. The model is valid only for
   // the duration of the call.
   virtual void Render(const ShellViewModel& vm) = 0;
+  [[nodiscard]] virtual bool UrlDragChanged(Point point, bool active) = 0;
   [[nodiscard]] virtual Result<void> RegisterGlassBackdrop(
       const GlassBackdropResource&) = 0;
   [[nodiscard]] virtual Result<void> SubmitGlassBackdrop(

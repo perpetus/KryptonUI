@@ -226,6 +226,8 @@ void LibraryPresenter::PresentDownloads(const LibraryState& state,
         .can_cancel = running,
         .can_show = download.state == DownloadState::kComplete &&
                     download.flags.Has(DownloadFlag::kFileExists),
+        .can_open = download.state != DownloadState::kInProgress ||
+                    download.flags.Has(DownloadFlag::kBlocked),
     });
   }
 }

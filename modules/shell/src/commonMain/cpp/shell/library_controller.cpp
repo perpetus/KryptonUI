@@ -221,7 +221,10 @@ void Shell::NotifyLibraryVisibility() {
 }
 
 void Shell::OnDownloadCommand(DownloadId id, DownloadCommand command) {
-  if (store_.library().FindDownload(id))
+  if (const auto* entry = store_.library().FindDownload(id);
+      entry && (command != DownloadCommand::kOpen ||
+                entry->state != DownloadState::kInProgress ||
+                entry->flags.Has(DownloadFlag::kBlocked)))
     browser_.SendDownloadCommand(id, command);
 }
 

@@ -20,7 +20,8 @@ class AppMenuPresenter {
             Rect viewport,
             float scale,
             xaml::ElementTheme theme,
-            xaml::FlowDirection direction);
+            xaml::FlowDirection direction,
+            bool site_info = false);
   void Update(Rect viewport,
               float scale,
               xaml::ElementTheme theme,
@@ -35,7 +36,9 @@ class AppMenuPresenter {
 
  private:
   void Build(std::size_t index);
-  void Navigate(std::size_t index, winrt::hstring title) noexcept;
+  void Navigate(std::size_t index,
+                winrt::hstring title,
+                std::int32_t source_command = 0) noexcept;
   void Back() noexcept;
   void Focus(const controls::Button& button);
   controls::Button Command(const MenuItem& item,
@@ -49,6 +52,7 @@ class AppMenuPresenter {
   void Separator();
   void FocusFirst();
   [[nodiscard]] bool RefreshInPlace(const MenuTree& tree);
+  [[nodiscard]] bool RefreshSiteInfo(const MenuTree& tree);
   void Key(const xaml::Input::KeyRoutedEventArgs& args);
   void EnsureOwner();
   void Reposition() noexcept;
@@ -62,13 +66,20 @@ class AppMenuPresenter {
   std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
   MenuTree tree_;
   std::vector<std::size_t> path_;
+  std::vector<std::int32_t> path_commands_;
   std::vector<winrt::hstring> titles_;
+  struct LiveRow {
+    NativeButton* button = nullptr;
+    controls::TextBlock label{nullptr}, detail{nullptr}, mark{nullptr};
+  };
+  std::unordered_map<std::int32_t, LiveRow> live_rows_;
+  controls::TextBlock active_title_{nullptr};
+  bool site_info_ = false;
+  std::unique_ptr<NativeButton> site_close_;
   std::vector<std::unique_ptr<NativeButton>> buttons_;
   std::vector<controls::Button> focus_targets_;
   std::unordered_map<ImageId, media::ImageSource> menu_images_;
   controls::Primitives::Popup popup_;
-  controls::Grid layers_;
-  controls::SystemBackdropElement backdrop_;
   controls::Border surface_;
   controls::ScrollViewer scroll_;
   controls::StackPanel content_;

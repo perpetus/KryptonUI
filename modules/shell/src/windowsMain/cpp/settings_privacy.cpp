@@ -133,10 +133,11 @@ void PrivacySettings::Reconcile(const PrivacyFeaturesVm& vm, UiTextView text) {
         row.toggle.OffContent(winrt::box_value(L""));
       }
       row.toggle.VerticalAlignment(xaml::VerticalAlignment::Center);
-      controls::Grid::SetColumn(row.toggle, 1);
       if (styled_) {
+        const auto toggle = style_.Toggle(row.toggle);
+        controls::Grid::SetColumn(toggle, 1);
         row.main.Children().Append(row.labels);
-        row.main.Children().Append(row.toggle);
+        row.main.Children().Append(toggle);
         row.body.Children().Append(row.main);
       } else {
         row.labels.Children().Clear();

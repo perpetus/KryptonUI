@@ -9,6 +9,7 @@
 #include "krypton/ui/core/log.hpp"
 #include "krypton/ui/layout/horizontal_layout.hpp"
 #include "krypton/ui/model/tab_drop.hpp"
+#include "krypton/ui/model/url_drop.hpp"
 #include "krypton/ui/platform/platform.hpp"
 #include "krypton/ui/presentation/clear_tabs.hpp"
 #include "krypton/ui/presentation/multi_page.hpp"
@@ -234,6 +235,16 @@ void Shell::ShowMenu(std::uint32_t request_id, const MenuTree& menu) {
 void Shell::FocusAddress(bool select_all) {
   if (OnboardingActive())
     return;
+  if (!select_all &&
+      store_.appearance_prefs().flags.Has(AppearanceFlag::kNewTabPage)) {
+    // Chromium focuses the location bar by itself (`select_all` is its
+    // user_initiated), as when a New Tab Page opens. With the New Tab Page
+    // chosen, that page stays in view and keeps focus; the search bar opens
+    // only when asked for.
+    CloseAddress();
+    browser_.FocusPage();
+    return;
+  }
   DismissBoostEditor();
   OnWorkspaceEditorDismissed();
   OnThemeEditorDismissed();
@@ -306,39 +317,60 @@ void Shell::OnTabMuteToggled(TabId tab) {
   }
 }
 
-// Tab order belongs to the host: a drop asks for the move and the host pushes
-// the result back.
+// Tab order and sections belong to the host: a drop asks for the section
+// change and the move, and the host pushes the result back.
 void Shell::OnTabDropped(TabId tab,
                          TabId previous,
                          TabId next,
-                         std::optional<bool> pinned) {
+                         TabDropSection section) {
+  // The view keeps showing the old order until the host answers. Reconcile
+  // even when the host ignores or clamps the request; host updates coalesce
+  // with this render.
+  store_.InvalidateTabs();
+  ScheduleRender();
+  const auto* source = store_.FindTab(tab);
+  if (!source)
+    return;
+  // Essentials hold no folder; the host takes a promoted tab out of its own.
   const auto* neighbor = store_.FindTab(next ? next : previous);
-  const auto destination = neighbor ? neighbor->folder : FolderId{};
-  if (const auto* source = store_.FindTab(tab);
-      source && source->folder != destination && browser_.CanFolders())
+  const auto destination = neighbor && section != TabDropSection::kEssentials
+                               ? neighbor->folder
+                               : FolderId{};
+  if (destination)
+    section = TabDropSection::kPinned;
+  const auto tabs = store_.tabs();
+  const auto to = TabDropIndex(tabs, tab, previous, next);
+  const auto change = TabDropFlags(source->flags, section);
+  // The sidebar shows the active space, so a dropped tab joins it. Essentials
+  // appear in every space; moving one must not switch to the space it came
+  // from.
+  const auto space = section != TabDropSection::kKeep && store_.active_space()
+                         ? store_.active_space()
+                         : source->space;
+  const bool refold = source->folder != destination &&
+                      section != TabDropSection::kEssentials &&
+                      browser_.CanFolders();
+  // Host calls can publish synchronously and invalidate `source`.
+  source = nullptr;
+  if (refold)
     (void)browser_.FolderCommand({.kind = FolderCommandKind::kMoveTab,
                                   .folder = destination,
                                   .tab = tab});
-  if (destination)
-    pinned = true;
-  const auto tabs = store_.tabs();
-  const auto moved = std::ranges::find(tabs, tab, &Tab::id);
-  const auto to = moved == tabs.end() ? std::nullopt
-                                      : TabDropIndex(tabs, tab, previous, next);
-  const bool pin = moved != tabs.end() && pinned &&
-                   *pinned != moved->flags.Has(TabFlag::kPinned);
-  const bool move = to && *to != static_cast<std::size_t>(moved - tabs.begin());
-  const auto space = moved != tabs.end() ? moved->space : SpaceId{};
-  // Reconcile the native drop even when the host ignores an unsupported move
-  // or clamps it to the current position. Host updates coalesce with this task.
-  store_.InvalidateTabs();
-  ScheduleRender();
-  if (pin) {
-    const Flags<TabFlag> pinned_flag{TabFlag::kPinned};
-    browser_.SetTabFlags(tab, pinned_flag,
-                         *pinned ? pinned_flag : Flags<TabFlag>{});
-  }
-  if (move)
+  if (!change.mask.none())
+    browser_.SetTabFlags(tab, change.mask, change.values);
+  const auto now = store_.tabs();
+  const auto current = std::ranges::find(now, tab, &Tab::id);
+  if (current == now.end())
+    return;
+  // Hosts publish flag changes before returning. One can decline an
+  // Essential, as for a split view; that tab stays where it was rather than
+  // moving among the Essentials.
+  if (change.values.Has(TabFlag::kFavorite) &&
+      !current->flags.Has(TabFlag::kFavorite))
+    return;
+  // The index counts only the other tabs, so a host that moved the tab while
+  // changing its section leaves it valid.
+  if (to && *to != static_cast<std::size_t>(current - now.begin()))
     browser_.MoveTab(tab, space, *to);
 }
 
@@ -346,8 +378,14 @@ void Shell::OnNewTab() {
   DismissBoostEditor();
   OnWorkspaceEditorDismissed();
   OnThemeEditorDismissed();
-  // A new tab starts as an empty command bar. Nothing opens until
-  // the user picks something.
+  if (store_.appearance_prefs().flags.Has(AppearanceFlag::kNewTabPage)) {
+    // Chromium's New tab: the host opens its New Tab Page.
+    CloseAddress();
+    browser_.NewTab();
+    return;
+  }
+  // Zen's New tab: an empty command bar. Nothing opens until the user picks
+  // something.
   command_opens_new_tab_ = true;
   if (browser_.SupportsSuggestionSnapshots()) {
     SetAddressText({}, false);
@@ -357,6 +395,22 @@ void Shell::OnNewTab() {
   store_.OpenCommandBar({}, false);
   NotifyAddressState();
   ScheduleRender();
+}
+
+void Shell::OnUrlDropped(std::string_view url) {
+  if (!IsDroppedWebUrl(url))
+    return;
+  DismissBoostEditor();
+  OnWorkspaceEditorDismissed();
+  OnThemeEditorDismissed();
+  CloseAddress();
+  while (!menu_anchors_.empty())
+    DismissMenu(menu_anchors_.begin()->first);
+  browser_.Navigate(url, Disposition::kNewTab);
+}
+
+bool Shell::UrlDragChanged(Point point, bool active) {
+  return view_->UrlDragChanged(point, active);
 }
 
 void Shell::OnSpaceSelected(SpaceId space) {

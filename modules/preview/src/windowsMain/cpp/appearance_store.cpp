@@ -59,7 +59,8 @@ bool IsValid(const fixtures::AppearancePrefs& prefs) noexcept {
            ~(KR_APPEARANCE_HIDE_HOVER_IMAGES | KR_APPEARANCE_HIDE_HOVER_MEMORY |
              KR_APPEARANCE_ATTACHED_SEARCH_BAR |
              KR_APPEARANCE_SEARCH_BAR_FLOATING_ON_TYPE |
-             KR_APPEARANCE_SEARCH_BAR_MENU_BACKDROP)) &&
+             KR_APPEARANCE_SEARCH_BAR_MENU_BACKDROP |
+             KR_APPEARANCE_NEW_TAB_PAGE)) &&
          !(prefs.layout_flags & ~kKnownLayoutFlags) &&
          std::isfinite(prefs.sidebar_width) && prefs.sidebar_width >= 0.0f &&
          prefs.sidebar_width <= kMaxSidebarWidth;

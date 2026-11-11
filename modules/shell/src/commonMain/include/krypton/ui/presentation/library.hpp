@@ -24,6 +24,7 @@ struct DownloadVm {
   bool progress_known = false;
   bool can_cancel = false;
   bool can_show = false;
+  bool can_open = false;
 };
 
 struct MediaCardVm {

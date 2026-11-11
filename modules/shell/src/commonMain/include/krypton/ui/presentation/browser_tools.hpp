@@ -15,6 +15,8 @@ inline constexpr std::array<std::string_view, 5> kPermissionSettingLabels{
     "Use default", "Allow", "Block", "Ask", "Allow for this session"};
 inline constexpr std::string_view kTaskManagerTitle = "Task Manager";
 inline constexpr std::string_view kPermissionManagerTitle = "Site permissions";
+inline constexpr std::string_view kCloseSiteInfoLabel =
+    "Close site information";
 inline constexpr std::string_view kTaskSearchPlaceholder = "Search tasks";
 inline constexpr std::string_view kPermissionSearchPlaceholder =
     "Search sites or permissions";

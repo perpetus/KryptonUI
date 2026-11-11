@@ -1,11 +1,13 @@
 #include "library_visuals.hpp"
 
+#include <winrt/Microsoft.UI.Input.h>
 #include <winrt/Microsoft.UI.Xaml.Input.h>
 #include <winrt/Microsoft.UI.Xaml.Markup.h>
 
 #include <format>
 #include <limits>
 #include <numbers>
+#include <utility>
 
 namespace kr::win {
 namespace {
@@ -252,15 +254,52 @@ DownloadEntry::DownloadEntry(
     root_.Background(context_.brushes.transparent);
     Refresh();
   });
+  const auto cancel_press = [this](auto&&, auto&&) {
+    pressed_ = {};
+    released_ = {};
+  };
+  canceled_ = root_.PointerCanceled(winrt::auto_revoke, cancel_press);
+  // Implicit capture can end between PointerReleased and Tapped. A completed
+  // press/release remains eligible; a lost in-progress press does not.
+  capture_lost_ = root_.PointerCaptureLost(
+      winrt::auto_revoke, [this](auto&&, auto&&) { pressed_ = {}; });
+  unloaded_ = root_.Unloaded(winrt::auto_revoke, cancel_press);
+  pressed_event_ = root_.PointerPressed(
+      winrt::auto_revoke,
+      [this](auto&&, const xaml::Input::PointerRoutedEventArgs& args) {
+        pressed_ = {};
+        released_ = {};
+        if (id_ && can_open_ &&
+            !IsWithin(args.OriginalSource(), action_->control)) {
+          pressed_ = id_;
+          pressed_pointer_ = args.Pointer().PointerId();
+        }
+      });
+  released_event_ = root_.PointerReleased(
+      winrt::auto_revoke,
+      [this](auto&&, const xaml::Input::PointerRoutedEventArgs& args) {
+        const auto pressed = std::exchange(pressed_, DownloadId{});
+        const auto at = args.GetCurrentPoint(root_).Position();
+        if (pressed == id_ && pressed && can_open_ &&
+            args.Pointer().PointerId() == pressed_pointer_ &&
+            !IsWithin(args.OriginalSource(), action_->control) && at.X >= 0 &&
+            at.Y >= 0 && at.X < root_.ActualWidth() &&
+            at.Y < root_.ActualHeight())
+          released_ = pressed;
+      });
   tapped_ = root_.Tapped(
       winrt::auto_revoke,
       [this](auto&&, const xaml::Input::TappedRoutedEventArgs& args) {
-        if (id_ && !IsWithin(args.OriginalSource(), action_->control))
+        const auto released = std::exchange(released_, DownloadId{});
+        if (released == id_ && released && can_open_ &&
+            !IsWithin(args.OriginalSource(), action_->control))
           context_.delegate.OnDownloadCommand(id_, DownloadCommand::kOpen);
       });
   context_menu_ = root_.RightTapped(
       winrt::auto_revoke,
       [this](auto&&, const xaml::Input::RightTappedRoutedEventArgs& args) {
+        pressed_ = {};
+        released_ = {};
         if (!id_)
           return;
         context_.request_menu(
@@ -302,7 +341,12 @@ void DownloadEntry::SetActionSpaceReserved(bool reserved) {
 void DownloadEntry::Update(const DownloadVm& download,
                            const LibraryPaletteVm& palette,
                            const media::ImageSource& picture) {
+  if (id_ != download.id) {
+    pressed_ = {};
+    released_ = {};
+  }
   id_ = download.id;
+  can_open_ = download.can_open;
   can_cancel_ = download.can_cancel;
   can_show_ = download.can_show;
   badge_.Update(download, palette, picture);

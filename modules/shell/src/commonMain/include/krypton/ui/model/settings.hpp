@@ -35,7 +35,9 @@ enum class AppearanceFlag : std::uint32_t {
   kHideHoverMemory = 1u << 1,
   kAttachedSearchBar = 1u << 2,
   kSearchBarFloatingOnType = 1u << 3,
-  kSearchBarMenuBackdrop = 1u << 4
+  kSearchBarMenuBackdrop = 1u << 4,
+  // New tab buttons open a New Tab Page instead of the search bar.
+  kNewTabPage = 1u << 5
 };
 template <>
 inline constexpr bool kIsFlagEnum<AppearanceFlag> = true;
@@ -66,9 +68,12 @@ enum class AppearanceOption {
   kIconPack,
   kGlassMode,
   kSearchBarBehavior,
-  kSearchBarMenuBackdrop
+  kSearchBarMenuBackdrop,
+  kNewTabBehavior
 };
 enum class SearchBarBehavior { kNormal, kFloatingOnType, kAlwaysFloating };
+// What New tab opens: Zen's search bar, or Chromium's New Tab Page.
+enum class NewTabBehavior : std::uint32_t { kSearchBar, kNewTabPage };
 struct AppearanceEdit {
   AppearanceOption option;
   std::uint32_t value = 0;
@@ -170,6 +175,7 @@ struct BrowserSettingsState {
 };
 struct SettingsState {
   bool open = false;
+  bool navigation_collapsed = false;
   SettingsSection section = SettingsSection::kAppearance;
   std::uint32_t open_serial = 0;
   bool appearance_editable = false, layout_editable = false;

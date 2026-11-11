@@ -504,7 +504,7 @@ MockBrowser::MockBrowser(MockOptions options, MockHostCallbacks callbacks)
           (KR_APPEARANCE_HIDE_HOVER_IMAGES | KR_APPEARANCE_HIDE_HOVER_MEMORY |
            KR_APPEARANCE_ATTACHED_SEARCH_BAR |
            KR_APPEARANCE_SEARCH_BAR_FLOATING_ON_TYPE |
-           KR_APPEARANCE_SEARCH_BAR_MENU_BACKDROP);
+           KR_APPEARANCE_SEARCH_BAR_MENU_BACKDROP | KR_APPEARANCE_NEW_TAB_PAGE);
       if (KR_HAS_FIELD(prefs, KrAppearancePrefs, icon_pack) &&
           prefs->icon_pack <= KR_ICON_PACK_RADIX)
         mock.options_.appearance.icon_pack =

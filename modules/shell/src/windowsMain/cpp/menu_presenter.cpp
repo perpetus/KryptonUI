@@ -297,7 +297,8 @@ void MenuPresenter::Show(std::uint32_t request,
     const auto& owner = on_toolbar ? toolbar : sidebar;
     kind_ = kind;
     app_menu_->Show(request, tree, anchor, images, viewport, scale,
-                    owner.RequestedTheme(), owner.FlowDirection());
+                    owner.RequestedTheme(), owner.FlowDirection(),
+                    kind == MenuKind::kSecurity);
     return;
   }
   if (menu_open_ && menu_ && menu_request_ == request) {

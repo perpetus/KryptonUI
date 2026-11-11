@@ -38,6 +38,7 @@ class AppearanceSettings {
     controls::Grid grid{nullptr};
     controls::TextBlock label{nullptr};
     xaml::FrameworkElement control{nullptr};
+    xaml::FrameworkElement input{nullptr};
     bool stacked = false;
     xaml::FrameworkElement::SizeChanged_revoker resized;
   };
@@ -65,10 +66,13 @@ class AppearanceSettings {
   const SettingsStyle& style_;
   std::array<controls::StackPanel, 4> sections_, groups_;
   controls::StackPanel root_;
-  controls::ComboBox scheme_, material_, icon_pack_, glass_, search_bar_;
+  controls::ComboBox scheme_, material_, icon_pack_, glass_, search_bar_,
+      new_tab_;
   std::array<controls::ComboBoxItem, 3> search_bar_choices_{nullptr, nullptr,
                                                             nullptr};
-  controls::Primitives::Selector::SelectionChanged_revoker search_bar_changed_;
+  std::array<controls::ComboBoxItem, 2> new_tab_choices_{nullptr, nullptr};
+  controls::Primitives::Selector::SelectionChanged_revoker search_bar_changed_,
+      new_tab_changed_;
   controls::Grid horizontal_, vertical_, sidebar_width_row_;
   controls::NumberBox sidebar_width_;
   controls::ToggleSwitch hover_images_, hover_memory_,

@@ -158,6 +158,9 @@ Result<void> Shell::ShowSitePermissions(std::string origin) {
   return {};
 }
 Result<void> Shell::UpsertSitePermission(SitePermission value) {
+  if (store_.browser_tools().permissions_open &&
+      store_.browser_tools().permission_origin.empty())
+    store_.EditBrowserTools().permission_origin = value.origin;
   auto result = store_.EditBrowserTools().UpsertPermission(std::move(value));
   if (result)
     ScheduleRender();

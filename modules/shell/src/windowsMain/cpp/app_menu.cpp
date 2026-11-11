@@ -12,6 +12,7 @@
 
 #include "krypton/ui/layout/popup_layout.hpp"
 #include "krypton/ui/platform/platform.hpp"
+#include "krypton/ui/presentation/browser_tools.hpp"
 #include "krypton/ui/presentation/menu_shortcut.hpp"
 #include "native_input.hpp"
 
@@ -39,12 +40,11 @@ AppMenuPresenter::AppMenuPresenter(HWND parent,
   surface_.CornerRadius(UniformCorners(kTokens.menu.radius));
   scroll_.MinWidth(0);
   scroll_.MinHeight(0);
-  backdrop_.IsHitTestVisible(false);
-  layers_.Children().Append(backdrop_);
-  layers_.Children().Append(surface_);
-  popup_.Child(layers_);
+  popup_.Child(surface_);
   popup_.IsLightDismissEnabled(true);
-  popup_.ShouldConstrainToRootBounds(true);
+  // Use the native windowed-popup target for system materials. Reposition()
+  // still constrains the panel to the browser's client viewport.
+  popup_.ShouldConstrainToRootBounds(false);
   closed_ = popup_.Closed(winrt::auto_revoke, [this](auto&&, auto&&) {
     if (open_ && opened_ && !popup_.IsOpen())
       Close();
@@ -131,14 +131,22 @@ Button AppMenuPresenter::Command(const MenuItem& item,
       winrt::to_hstring(item.metadata && !item.metadata->accessible_name.empty()
                             ? item.metadata->accessible_name
                             : item.label),
-      [this, command = item.command_id, keep = item.keep_open,
-       submenu = item.submenu, title = winrt::to_hstring(item.label)] {
-        if (submenu >= 0) {
-          Navigate(static_cast<std::size_t>(submenu), title);
+      [] {});
+  LiveRow live{.button = native.get()};
+  native->click = native->control.Click(
+      winrt::auto_revoke,
+      [this, row = native.get(), keep = item.keep_open,
+       submenu = item.submenu >= 0,
+       title = winrt::to_hstring(item.label)](auto&&, auto&&) {
+        if (submenu) {
+          Navigate(static_cast<std::size_t>(
+                       winrt::unbox_value<std::int32_t>(row->control.Tag())),
+                   row->label ? row->label.Text() : title);
           return;
         }
         const auto request = request_;
-        context_.delegate.OnMenuCommand(request, command);
+        context_.delegate.OnMenuCommand(request,
+                                        static_cast<std::int32_t>(row->seen));
         if (!keep && open_ && request_ == request)
           Close();
       });
@@ -203,6 +211,8 @@ Button AppMenuPresenter::Command(const MenuItem& item,
   }();
   const auto make_label = [&] {
     auto label = Label(winrt::to_hstring(item.label), kTokens.type.size_small);
+    native->label = label;
+    live.label = label;
     label.Foreground(context_.brushes.text);
     label.TextWrapping(xaml::TextWrapping::Wrap);
     return label;
@@ -242,14 +252,18 @@ Button AppMenuPresenter::Command(const MenuItem& item,
     }
   } else {
     Grid row;
-    const bool status =
-        item.metadata && !item.metadata->secondary_label.empty();
+    const bool status = item.type != MenuItemType::kTitle && item.metadata &&
+                        !item.metadata->secondary_label.empty();
     AddColumn(row,
-              status ? kTokens.site_data_menu.status_icon_size : t.icon_size,
+              site_info_ && item.type == MenuItemType::kTitle ? 0
+              : status ? kTokens.site_data_menu.status_icon_size
+                       : t.icon_size,
               xaml::GridUnitType::Pixel);
     AddColumn(row, 1, xaml::GridUnitType::Star);
     AddColumn(row, 0, xaml::GridUnitType::Auto);
-    if (item.checked || item.submenu >= 0)
+    const bool checkable = site_info_ && (item.type == MenuItemType::kCheck ||
+                                          item.type == MenuItemType::kRadio);
+    if (item.checked || item.submenu >= 0 || checkable)
       AddColumn(row, 0, xaml::GridUnitType::Auto);
     row.ColumnSpacing(t.icon_gap);
     if (icon) {
@@ -275,11 +289,17 @@ Button AppMenuPresenter::Command(const MenuItem& item,
     }
     const auto label = make_label();
     Grid::SetColumn(label, 1);
-    if (item.metadata && !item.metadata->secondary_label.empty()) {
+    if (site_info_ ||
+        (item.metadata && !item.metadata->secondary_label.empty())) {
       StackPanel labels;
       labels.Children().Append(label);
-      auto secondary = Label(winrt::to_hstring(item.metadata->secondary_label),
-                             kTokens.type.size_small);
+      const auto detail =
+          item.metadata ? item.metadata->secondary_label : std::string{};
+      auto secondary =
+          Label(winrt::to_hstring(detail), kTokens.type.size_small);
+      secondary.Visibility(detail.empty() ? xaml::Visibility::Collapsed
+                                          : xaml::Visibility::Visible);
+      live.detail = secondary;
       secondary.Foreground(context_.brushes.muted);
       secondary.TextWrapping(xaml::TextWrapping::Wrap);
       labels.Children().Append(secondary);
@@ -293,8 +313,11 @@ Button AppMenuPresenter::Command(const MenuItem& item,
       Grid::SetColumn(accelerator, 2);
       row.Children().Append(accelerator);
     }
-    if (item.checked) {
+    if (item.checked || checkable) {
       const auto mark = Glyph(L"\uE73E", t.icon_size);
+      mark.Visibility(item.checked ? xaml::Visibility::Visible
+                                   : xaml::Visibility::Collapsed);
+      live.mark = mark;
       mark.Foreground(context_.brushes.text);
       mark.Margin({t.icon_gap, 0, 0, 0});
       Grid::SetColumn(mark, 3);
@@ -302,6 +325,8 @@ Button AppMenuPresenter::Command(const MenuItem& item,
     }
     button.Content(row);
   }
+  if (site_info_ && item.metadata)
+    live_rows_[item.metadata->source_command_id] = live;
   focus_targets_.push_back(button);
   buttons_.push_back(std::move(native));
   return button;
@@ -311,13 +336,15 @@ void AppMenuPresenter::Row(const MenuItem& item) {
   auto button = Command(item);
   if (item.type == MenuItemType::kSubmenu && item.submenu >= 0) {
     auto& native = *buttons_.back();
-    native.click.revoke();
-    native.click =
-        button.Click(winrt::auto_revoke,
-                     [this, index = static_cast<std::size_t>(item.submenu),
-                      title = winrt::to_hstring(item.label)](auto&&, auto&&) {
-                       Navigate(index, title);
-                     });
+    if (!site_info_) {
+      native.click.revoke();
+      native.click =
+          button.Click(winrt::auto_revoke,
+                       [this, index = static_cast<std::size_t>(item.submenu),
+                        title = winrt::to_hstring(item.label)](auto&&, auto&&) {
+                         Navigate(index, title);
+                       });
+    }
     const auto grid = button.Content().as<Grid>();
     button.Tag(winrt::box_value(item.submenu));
     auto chevron =
@@ -571,8 +598,36 @@ void AppMenuPresenter::Build(std::size_t index) {
   fade_.Stop();
   focus_loaded_.revoke();
   content_.Children().Clear();
+  site_close_.reset();
+  live_rows_.clear();
+  active_title_ = nullptr;
   focus_targets_.clear();
   buttons_.clear();
+  const bool site_header =
+      site_info_ && path_.size() == 1 && index < tree_.menus.size() &&
+      !tree_.menus[index].empty() &&
+      tree_.menus[index].front().type == MenuItemType::kTitle;
+  if (site_header) {
+    Grid header;
+    AddColumn(header, 1, xaml::GridUnitType::Star);
+    AddColumn(header, 0, xaml::GridUnitType::Auto);
+    active_title_ = Label(winrt::to_hstring(tree_.menus[index].front().label),
+                          kTokens.type.size);
+    active_title_.FontWeight(kSemiBold);
+    active_title_.Foreground(context_.brushes.text);
+    active_title_.TextWrapping(xaml::TextWrapping::Wrap);
+    active_title_.VerticalAlignment(xaml::VerticalAlignment::Center);
+    header.Children().Append(active_title_);
+    site_close_ =
+        IconButton(context_.brushes, glyphs::kClose,
+                   winrt::to_hstring(kCloseSiteInfoLabel), [this] { Close(); });
+    Grid::SetColumn(site_close_->control, 1);
+    header.Children().Append(site_close_->control);
+    header.Margin({kTokens.app_menu.row_padding_inline, 0,
+                   kTokens.app_menu.row_padding_inline, 0});
+    content_.Children().Append(header);
+    Separator();
+  }
   if (path_.size() > 1) {
     MenuItem back{
         .label = winrt::to_string(back_text_),
@@ -586,6 +641,7 @@ void AppMenuPresenter::Build(std::size_t index) {
         button.Click(winrt::auto_revoke, [this](auto&&, auto&&) { Back(); });
     content_.Children().Append(button);
     auto title = Label(titles_.back(), kTokens.type.size);
+    active_title_ = title;
     title.Foreground(context_.brushes.text);
     title.Margin({kTokens.app_menu.row_padding_inline,
                   kTokens.app_menu.row_padding_block,
@@ -596,6 +652,8 @@ void AppMenuPresenter::Build(std::size_t index) {
   }
   if (index < tree_.menus.size())
     for (const auto& item : tree_.menus[index]) {
+      if (site_header && &item == &tree_.menus[index].front())
+        continue;
       if (!item.IsVisible())
         continue;
       if (item.type == MenuItemType::kSeparator)
@@ -615,11 +673,20 @@ void AppMenuPresenter::Build(std::size_t index) {
 }
 
 void AppMenuPresenter::Navigate(std::size_t index,
-                                winrt::hstring title) noexcept {
+                                winrt::hstring title,
+                                std::int32_t source_command) noexcept {
   try {
     if (index >= tree_.menus.size())
       return;
+    if (site_info_ && !path_.empty())
+      for (const auto& item : tree_.menus[path_.back()])
+        if (item.submenu == static_cast<int>(index) && item.metadata) {
+          source_command = item.metadata->source_command_id;
+          title = winrt::to_hstring(item.label);
+          break;
+        }
     path_.push_back(index);
+    path_commands_.push_back(source_command);
     titles_.push_back(std::move(title));
     Build(index);
     Reposition();
@@ -638,6 +705,8 @@ void AppMenuPresenter::Back() noexcept {
     if (path_.size() < 2)
       return;
     path_.pop_back();
+    if (!path_commands_.empty())
+      path_commands_.pop_back();
     titles_.pop_back();
     Build(path_.back());
     Reposition();
@@ -664,8 +733,11 @@ void AppMenuPresenter::Focus(const Button& button) {
 }
 
 void AppMenuPresenter::FocusFirst() {
-  const auto first = std::ranges::find_if(
-      focus_targets_, [](const auto& button) { return button.IsEnabled(); });
+  const auto first =
+      std::ranges::find_if(focus_targets_, [](const auto& button) {
+        return button.IsEnabled() &&
+               button.Visibility() == xaml::Visibility::Visible;
+      });
   if (first == focus_targets_.end())
     return;
   Focus(*first);
@@ -753,7 +825,8 @@ void AppMenuPresenter::Key(const xaml::Input::KeyRoutedEventArgs& args) {
   const auto step = args.Key() == VirtualKey::Up ? -1 : 1;
   for (std::ptrdiff_t tries = 0; tries < count; ++tries) {
     index = (index + step + count) % count;
-    if (focus_targets_[index].IsEnabled()) {
+    if (focus_targets_[index].IsEnabled() &&
+        focus_targets_[index].Visibility() == xaml::Visibility::Visible) {
       focus_targets_[index].Focus(xaml::FocusState::Keyboard);
       break;
     }
@@ -761,7 +834,77 @@ void AppMenuPresenter::Key(const xaml::Input::KeyRoutedEventArgs& args) {
   args.Handled(true);
 }
 
+bool AppMenuPresenter::RefreshSiteInfo(const MenuTree& tree) {
+  const auto focused =
+      popup_.IsOpen() && content_.XamlRoot()
+          ? xaml::Input::FocusManager::GetFocusedElement(content_.XamlRoot())
+          : foundation::IInspectable{nullptr};
+  bool replace_focus = false;
+  if (tree.menus.size() != tree_.menus.size())
+    return false;
+  for (std::size_t menu = 0; menu < tree.menus.size(); ++menu) {
+    if (tree.menus[menu].size() != tree_.menus[menu].size())
+      return false;
+    for (std::size_t index = 0; index < tree.menus[menu].size(); ++index) {
+      const auto& next = tree.menus[menu][index];
+      const auto& old = tree_.menus[menu][index];
+      if (next.type != old.type || next.submenu != old.submenu ||
+          next.keep_open != old.keep_open || next.glyph != old.glyph ||
+          next.icon != old.icon || !next.metadata || !old.metadata ||
+          next.metadata->source_command_id != old.metadata->source_command_id)
+        return false;
+      if (next.IsVisible() && !old.IsVisible() && menu == path_.back())
+        return false;
+    }
+  }
+  for (const auto& menu : tree.menus)
+    for (const auto& item : menu) {
+      const auto found = live_rows_.find(item.metadata->source_command_id);
+      if (found == live_rows_.end())
+        continue;
+      auto& row = found->second;
+      replace_focus |= row.button->control == focused &&
+                       (!item.IsVisible() || !item.enabled);
+      row.button->seen = static_cast<std::uint64_t>(item.command_id);
+      row.button->control.IsEnabled(item.enabled &&
+                                    item.type != MenuItemType::kTitle);
+      row.button->control.Opacity(
+          item.enabled ? 1 : kTokens.app_menu.disabled_opacity);
+      row.button->control.Visibility(item.IsVisible()
+                                         ? xaml::Visibility::Visible
+                                         : xaml::Visibility::Collapsed);
+      if (item.submenu >= 0)
+        row.button->control.Tag(winrt::box_value(item.submenu));
+      if (row.label && row.label.Text() != winrt::to_hstring(item.label))
+        row.label.Text(winrt::to_hstring(item.label));
+      if (row.detail) {
+        const auto text = winrt::to_hstring(item.metadata->secondary_label);
+        if (row.detail.Text() != text)
+          row.detail.Text(text);
+        row.detail.Visibility(text.empty() ? xaml::Visibility::Collapsed
+                                           : xaml::Visibility::Visible);
+      }
+      if (row.mark)
+        row.mark.Visibility(item.checked ? xaml::Visibility::Visible
+                                         : xaml::Visibility::Collapsed);
+      Accessible(row.button->control,
+                 winrt::to_hstring(item.metadata->accessible_name.empty()
+                                       ? item.label
+                                       : item.metadata->accessible_name));
+    }
+  if (active_title_ && !titles_.empty())
+    active_title_.Text(path_.size() == 1 && !tree.menus.front().empty()
+                           ? winrt::to_hstring(tree.menus.front().front().label)
+                           : titles_.back());
+  tree_ = tree;
+  if (replace_focus)
+    FocusFirst();
+  return true;
+}
+
 bool AppMenuPresenter::RefreshInPlace(const MenuTree& tree) {
+  if (site_info_)
+    return RefreshSiteInfo(tree);
   if (tree.menus.size() != tree_.menus.size())
     return false;
   for (std::size_t menu = 0; menu < tree.menus.size(); ++menu) {
@@ -816,17 +959,51 @@ void AppMenuPresenter::Show(std::uint32_t request,
                             Rect viewport,
                             float scale,
                             xaml::ElementTheme theme,
-                            xaml::FlowDirection direction) {
+                            xaml::FlowDirection direction,
+                            bool site_info) {
+  site_info_ = site_info;
   const bool refresh = open_ && request == request_;
-  if (refresh && RefreshInPlace(tree)) {
+  bool path_changed = false;
+  if (refresh && site_info_) {
+    std::size_t retained = 1;
+    for (std::size_t step = 1; step < path_commands_.size(); ++step) {
+      if (path_[step - 1] >= tree.menus.size())
+        break;
+      const auto& parent = tree.menus[path_[step - 1]];
+      const auto found =
+          std::ranges::find_if(parent, [&](const MenuItem& item) {
+            return item.metadata && item.IsVisible() && item.submenu >= 0 &&
+                   item.metadata->source_command_id == path_commands_[step];
+          });
+      if (found == parent.end())
+        break;
+      const auto index = static_cast<std::size_t>(found->submenu);
+      path_changed |= path_[step] != index;
+      path_[step] = index;
+      titles_[step] = winrt::to_hstring(found->label);
+      ++retained;
+    }
+    path_changed |= retained != path_.size();
+    path_.resize(retained);
+    path_commands_.resize(retained);
+    titles_.resize(retained);
+  }
+  if (refresh && !path_changed && RefreshInPlace(tree)) {
     anchor_ = anchor;
     Update(viewport, scale, theme, direction);
     return;
   }
   std::optional<std::uint64_t> focused_command;
+  std::optional<std::int32_t> focused_source;
   if (refresh && popup_.IsOpen() && content_.XamlRoot()) {
     const auto focused =
         xaml::Input::FocusManager::GetFocusedElement(content_.XamlRoot());
+    if (site_info_)
+      for (const auto& [source, row] : live_rows_)
+        if (row.button && row.button->control == focused) {
+          focused_source = source;
+          break;
+        }
     for (const auto& button : buttons_)
       if (button->control == focused) {
         focused_command = button->seen;
@@ -836,6 +1013,7 @@ void AppMenuPresenter::Show(std::uint32_t request,
   if (!refresh) {
     Close(false);
     path_ = {0};
+    path_commands_ = {0};
     titles_ = {L""};
   }
   request_ = request;
@@ -850,7 +1028,6 @@ void AppMenuPresenter::Show(std::uint32_t request,
   surface_.CornerRadius(UniformCorners(tiled_ || navigation
                                            ? kTokens.site_data_menu.panel_radius
                                            : kTokens.menu.radius));
-  backdrop_.CornerRadius(surface_.CornerRadius());
   surface_.Padding(UniformThickness(tiled_ ? kTokens.site_data_menu.gap
                                            : kTokens.menu.padding));
   surface_.BorderThickness(
@@ -870,6 +1047,18 @@ void AppMenuPresenter::Show(std::uint32_t request,
   EnsureOwner();
   Update(viewport, scale, theme, direction);
   if (refresh) {
+    if (site_info_) {
+      const auto found =
+          focused_source ? live_rows_.find(*focused_source) : live_rows_.end();
+      if (found != live_rows_.end() &&
+          found->second.button->control.IsEnabled() &&
+          found->second.button->control.Visibility() ==
+              xaml::Visibility::Visible)
+        Focus(found->second.button->control);
+      else if (focused_source)
+        FocusFirst();
+      return;
+    }
     if (focused_command)
       for (const auto& button : buttons_)
         if (button->seen == *focused_command) {
@@ -915,14 +1104,10 @@ void AppMenuPresenter::Update(Rect viewport,
   content_.FlowDirection(direction);
   content_.RequestedTheme(theme);
   surface_.RequestedTheme(theme);
-  layers_.RequestedTheme(theme);
-  backdrop_.RequestedTheme(theme);
+  popup_.RequestedTheme(theme);
   surface_.Background(context_.brushes.menu_background);
-  // Popup.SystemBackdrop does not fill constrained desktop-island popups.
-  // A bounded native backdrop element renders the material behind both panels.
-  backdrop_.SystemBackdrop(
-      material_.For(context_.brushes.menu_backdrop_enabled(),
-                    context_.brushes.menu_material(), true));
+  popup_.SystemBackdrop(material_.For(context_.brushes.menu_backdrop_enabled(),
+                                      context_.brushes.menu_material()));
   if (changed_direction)
     Build(path_.back());
   island_.Show(viewport, scale, theme);
@@ -957,9 +1142,12 @@ void AppMenuPresenter::Reposition() noexcept {
     const auto border = surface_.BorderThickness();
     const float inset = static_cast<float>(padding.Left + padding.Right +
                                            border.Left + border.Right);
-    surface_.Width(tiled_ ? std::min<double>(kTokens.site_data_menu.panel_width,
-                                             available.width)
-                          : std::numeric_limits<double>::quiet_NaN());
+    surface_.Width(
+        site_info_
+            ? std::min<double>(kTokens.site_info_menu.width, available.width)
+        : tiled_ ? std::min<double>(kTokens.site_data_menu.panel_width,
+                                    available.width)
+                 : std::numeric_limits<double>::quiet_NaN());
     surface_.MaxWidth(available.width);
     surface_.MaxHeight(available.height);
     scroll_.MaxWidth(std::max(0.0f, available.width - inset));

@@ -109,6 +109,12 @@ void Shell::OnSettingsSectionSelected(SettingsSection section) {
     browser_.PrivacyFeaturesVisibilityChanged(privacy);
   ScheduleRender();
 }
+void Shell::OnSettingsNavigationToggled() {
+  if (!store_.ui().settings.open)
+    return;
+  store_.ToggleSettingsNavigation();
+  ScheduleRender();
+}
 void Shell::OnAppearanceEdited(AppearanceEdit edit) {
   if (edit.option == AppearanceOption::kIconPack &&
       !store_.ui().settings.icon_pack_editable)

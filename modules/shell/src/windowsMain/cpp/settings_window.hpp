@@ -74,14 +74,18 @@ class SettingsWindow {
   std::unique_ptr<PrivacySettings> privacy_;
   std::unique_ptr<NativeButton> permissions_;
   std::vector<controls::NavigationViewItem> items_;
+  std::vector<xaml::UIElement::DoubleTapped_revoker> double_tapped_;
   bool visible_ = false, reconciling_ = false, closing_registered_ = false,
-       text_ready_ = false;
+       text_ready_ = false, navigation_collapsed_ = false;
   std::uint32_t open_serial_ = 0;
   std::optional<SettingsSection> shown_section_;
   std::optional<winrt::Microsoft::UI::Windowing::TitleBarTheme> title_theme_;
   winrt::event_token closing_{};
   xaml::Window::Activated_revoker activated_;
   controls::NavigationView::SelectionChanged_revoker selected_;
+  controls::NavigationView::PaneOpened_revoker pane_opened_;
+  controls::NavigationView::PaneClosed_revoker pane_closed_;
+  controls::NavigationView::DisplayModeChanged_revoker display_changed_;
   xaml::UIElement::KeyDown_revoker key_;
   xaml::UIElement::ProcessKeyboardAccelerators_revoker fallback_key_;
 };

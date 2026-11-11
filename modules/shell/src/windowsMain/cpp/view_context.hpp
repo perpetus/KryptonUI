@@ -46,6 +46,7 @@ struct ViewContext {
   // Finish another hover preview before an explicit surface takes focus.
   std::move_only_function<void(const xaml::FrameworkElement&)>
       dismiss_hover_popups;
+  std::move_only_function<void(Point, bool)> url_drag_changed;
 };
 
 }  // namespace kr::win

@@ -8,7 +8,6 @@
 #include <winrt/Microsoft.UI.Xaml.Hosting.h>
 #include <winrt/Microsoft.UI.Xaml.Input.h>
 #include <winrt/Microsoft.UI.Xaml.Markup.h>
-#include <winrt/Windows.ApplicationModel.DataTransfer.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.System.h>
 
@@ -38,7 +37,6 @@ bool TabList::FocusNative(TabId target) {
   return container && container.Focus(xaml::FocusState::Programmatic);
 }
 using namespace controls;
-using winrt::Windows::ApplicationModel::DataTransfer::DataPackageOperation;
 using winrt::Windows::System::VirtualKey;
 using xaml::CornerRadius;
 using xaml::Thickness;
@@ -52,6 +50,7 @@ TabList::TabList(ViewContext& context, bool& anchors_dirty)
 
 TabList::~TabList() {
   lifetime_.reset();
+  RemoveDrag();
 }
 
 void TabList::Render(const ShellViewModel& vm) {
@@ -86,8 +85,15 @@ void TabList::Render(const ShellViewModel& vm) {
   preview_metrics_ = MeasureTabPreviewForLayout(vm.client, vm.layout);
   if (!horizontal_)
     SetHoverWidth(vm.layout.sidebar.width);
-  if (!horizontal_)
-    favorites_.Render(vm);
+  // A drag ends with the window's activation, and when the Essentials it
+  // reorders change underneath it.
+  if (drag_.phase != DragPhase::kIdle && !vm.header.window_active)
+    CancelDrag();
+  if (!horizontal_ && favorites_.Render(vm) &&
+      drag_.phase == DragPhase::kDragging &&
+      (drag_.source == DragSource::kEssential ||
+       drag_.target.kind == DropTarget::Kind::kEssentials))
+    CancelDrag();
   for (const auto& [key, row] : rows_) {
     row->preview->Configure(preview_metrics_);
     row->preview->Render(vm);
@@ -127,10 +133,14 @@ void TabList::SetHorizontal(bool horizontal) {
   auto& previous_panel = panels_[horizontal_ ? 1 : 0];
   if (!previous_panel)
     previous_panel = tabs_.ItemsPanel();
+  CancelDrag();
+  // A new items panel discards the old containers without recycling them, so
+  // the New tab row's button would stay in a row that is no longer shown.
+  DetachNewTabButton();
   horizontal_ = horizontal;
   rendered_ = false;
   scrolled_tab_ = {};
-  favorites_.ClosePreviews();
+  favorites_.ResetPointerState();
   tabs_.Header(horizontal ? nullptr : favorites_.Root().as<IInspectable>());
   auto& panel = panels_[horizontal ? 1 : 0];
   if (!panel)
@@ -164,6 +174,15 @@ void TabList::SetHorizontal(bool horizontal) {
     SizeHorizontalRow(*row);
   }
   UpdateClears();
+}
+
+void TabList::DetachNewTabButton() {
+  if (!new_tab_button_)
+    return;
+  const auto parent = new_tab_button_.Parent().try_as<Panel>();
+  std::uint32_t at = 0;
+  if (parent && parent.Children().IndexOf(new_tab_button_, at))
+    parent.Children().RemoveAt(at);
 }
 
 void TabList::SetHovered(TabRow& row, bool hovered) {
@@ -344,6 +363,8 @@ void TabList::CancelPointerInteraction() {
 }
 
 void TabList::ResetPointerState() {
+  CancelDrag();
+  favorites_.ResetPointerState();
   CancelPointerInteraction();
   for (const auto& [key, row] : rows_)
     if (row->clear)
@@ -505,15 +526,7 @@ void TabList::AppendAnchors(std::vector<Anchor>& anchors,
   const Rect viewport = horizontal_ ? layout.tab_strip : layout.sidebar;
   const bool visible =
       horizontal_ ? layout.tab_strip_visible : layout.sidebar_visible;
-  if (!tab_scroll_) {
-    tab_scroll_ = FindScrollViewer(tabs_);
-    if (tab_scroll_)
-      tab_scrolled_ =
-          tab_scroll_.ViewChanged(winrt::auto_revoke, [this](auto&&, auto&&) {
-            DismissHover();
-            anchors_dirty_ = true;
-          });
-  }
+  WatchScroll();
   for (const auto& [id, record] : records_) {
     if (!record.row || !record.row->background.Parent())
       continue;
@@ -573,52 +586,11 @@ void TabList::BuildTabs() {
                  .collapsed = !folder->collapsed});
         }
       });
-  // Rows reorder natively. The drop becomes a host move, and the host's order
-  // replaces the native one on the next render.
-  tabs_.CanDragItems(true);
-  tabs_.CanReorderItems(true);
+  // Rows move with a pointer drag the list captures (tab_list_drag.cpp).
+  // The list still accepts system drops: URLs dragged from pages or other
+  // applications land on the sidebar's URL drop target.
   tabs_.AllowDrop(true);
-  drag_starting_ = tabs_.DragItemsStarting(
-      winrt::auto_revoke,
-      [this](auto&&, const DragItemsStartingEventArgs& args) {
-        const auto items = args.Items();
-        const auto value =
-            items.Size() == 1
-                ? items.GetAt(0).try_as<foundation::IPropertyValue>()
-                : nullptr;
-        // Section headers stay where the presenter puts them.
-        if (!value || (value.Type() != foundation::PropertyType::UInt64 &&
-                       value.Type() != foundation::PropertyType::Int64)) {
-          args.Cancel(true);
-          return;
-        }
-        folder_drop_accepted_ = false;
-        dragged_tab_ = {};
-        dragged_folder_ = {};
-        if (value.Type() == foundation::PropertyType::UInt64) {
-          dragged_tab_ = TabId{value.GetUInt64()};
-          args.Data().Properties().Insert(L"krypton.tab",
-                                          winrt::box_value(dragged_tab_.value));
-        } else {
-          dragged_folder_ =
-              FolderId{std::bit_cast<std::uint64_t>(value.GetInt64())};
-          args.Data().Properties().Insert(
-              L"krypton.folder", winrt::box_value(dragged_folder_.value));
-        }
-        DismissHover();
-      });
-  drag_completed_ = tabs_.DragItemsCompleted(
-      winrt::auto_revoke,
-      [this](auto&&, const DragItemsCompletedEventArgs& args) {
-        const auto tab = std::exchange(dragged_tab_, TabId{});
-        const auto folder = std::exchange(dragged_folder_, FolderId{});
-        if (folder && !folder_drop_accepted_ &&
-            args.DropResult() == DataPackageOperation::Move)
-          ReportFolderDrop(folder);
-        if (tab && !folder_drop_accepted_ &&
-            args.DropResult() == DataPackageOperation::Move)
-          ReportDrop(tab);
-      });
+  InstallDrag();
   // WinUI owns ListViewItem.Content. A DataTemplate owns the row visuals;
   // ContainerContentChanging only updates that template's existing controls.
   // Setting Content here would race ItemsSource's realization/recycling.
@@ -648,9 +620,15 @@ void TabList::BuildTabs() {
     try {
       auto container = args.ItemContainer().as<ListViewItem>();
       const auto key = winrt::get_abi(container);
+      drag_slots_dirty_ = true;
       if (args.InRecycleQueue()) {
         if (const auto found = rows_.find(key); found != rows_.end()) {
           auto& row = *found->second;
+          if (drag_.row == &row) {
+            drag_.row = nullptr;
+            if (drag_visuals_)
+              drag_visuals_->DetachRow();
+          }
           if (new_tab_button_ && new_tab_button_.Parent() == row.grid) {
             std::uint32_t at = 0;
             if (row.grid.Children().IndexOf(new_tab_button_, at))
@@ -761,6 +739,7 @@ void TabList::BuildTabs() {
           container.IsEnabled(true);
           // The nested native button is the one keyboard stop for this row.
           container.IsTabStop(false);
+          DetachNewTabButton();
           Grid::SetColumnSpan(new_tab_button_, 5);
           row.grid.Children().Append(new_tab_button_);
         }
@@ -898,51 +877,6 @@ std::unique_ptr<TabRow> TabList::CreateTabRow(const ListViewItem& container,
   row.preview =
       std::make_unique<TabHoverCard>(context_, row.background, container);
   row.preview->Configure(preview_metrics_);
-  container.AllowDrop(true);
-  row.folder_drag = container.DragOver(
-      winrt::auto_revoke,
-      [native = &row](auto&&, const xaml::DragEventArgs& args) {
-        if (native->folder &&
-            (args.DataView().Properties().HasKey(L"krypton.tab") ||
-             args.DataView().Properties().HasKey(L"krypton.folder"))) {
-          args.AcceptedOperation(DataPackageOperation::Move);
-          args.Handled(true);
-        }
-      });
-  row.folder_drop = container.Drop(
-      winrt::auto_revoke,
-      [this, native = &row](auto&&, const xaml::DragEventArgs& args) {
-        const auto properties = args.DataView().Properties();
-        if (!native->folder)
-          return;
-        if (properties.HasKey(L"krypton.folder")) {
-          const FolderId folder{winrt::unbox_value<std::uint64_t>(
-              properties.Lookup(L"krypton.folder"))};
-          folder_drop_accepted_ =
-              static_cast<bool>(context_.delegate.OnFolderCommand(
-                  {.kind = FolderCommandKind::kMove,
-                   .folder = folder,
-                   .parent = native->folder}));
-          args.AcceptedOperation(folder_drop_accepted_
-                                     ? DataPackageOperation::Move
-                                     : DataPackageOperation::None);
-          args.Handled(true);
-          return;
-        }
-        if (!properties.HasKey(L"krypton.tab"))
-          return;
-        const TabId tab{winrt::unbox_value<std::uint64_t>(
-            properties.Lookup(L"krypton.tab"))};
-        folder_drop_accepted_ =
-            static_cast<bool>(context_.delegate.OnFolderCommand(
-                {.kind = FolderCommandKind::kMoveTab,
-                 .folder = native->folder,
-                 .tab = tab}));
-        args.AcceptedOperation(folder_drop_accepted_
-                                   ? DataPackageOperation::Move
-                                   : DataPackageOperation::None);
-        args.Handled(true);
-      });
   row.context = row.hit_target.RightTapped(
       winrt::auto_revoke,
       [this, native = &row](
@@ -1353,46 +1287,6 @@ void TabList::ReconcileTabs(const ShellViewModel& vm) {
                     "preparation limited to realized rows",
                     elapsed));
   }
-}
-
-void TabList::ReportDrop(TabId tab) {
-  // ListView moved the key in items_ itself. Mirror it, so the next reconcile
-  // starts from what is on screen.
-  displayed_.resize(items_.Size());
-  items_.GetMany(0, displayed_);
-  const auto record = records_.find(tab);
-  if (record == records_.end())
-    return;
-  const auto dropped = std::ranges::find(displayed_, record->second.item);
-  if (dropped == displayed_.end())
-    return;
-  const auto tab_of = [](const IInspectable& item) {
-    const auto value = item.as<foundation::IPropertyValue>();
-    return value.Type() == foundation::PropertyType::UInt64
-               ? TabId{value.GetUInt64()}
-               : TabId{};
-  };
-  TabId previous, next;
-  for (auto item = dropped; !previous && item != displayed_.begin();)
-    previous = tab_of(*--item);
-  for (auto item = dropped + 1; !next && item != displayed_.end(); ++item)
-    next = tab_of(*item);
-  std::optional<bool> pinned;
-  if (!horizontal_) {
-    // The section is the nearest header above the drop, or the first header
-    // when the tab was dropped above all of them.
-    const auto is_header = [&tab_of](const IInspectable& item) {
-      return !tab_of(item);
-    };
-    const auto above = std::find_if(std::make_reverse_iterator(dropped),
-                                    displayed_.rend(), is_header);
-    const auto below = std::find_if(dropped + 1, displayed_.end(), is_header);
-    if (above != displayed_.rend())
-      pinned = SameItem(*above, pinned_header_);
-    else if (below != displayed_.end())
-      pinned = SameItem(*below, pinned_header_);
-  }
-  context_.delegate.OnTabDropped(tab, previous, next, pinned);
 }
 
 bool TabList::SameItem(const IInspectable& a, const IInspectable& b) {

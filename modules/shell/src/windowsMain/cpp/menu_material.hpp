@@ -7,9 +7,7 @@
 
 namespace kr::win {
 [[nodiscard]] winrt::Microsoft::UI::Xaml::Media::SystemBackdrop
-MakeAcrylicThinBackdrop();
-[[nodiscard]] winrt::Microsoft::UI::Xaml::Media::SystemBackdrop
-MakeActiveMenuBackdrop(MenuMaterialKind selected);
+MakeMenuBackdrop(MenuMaterialKind selected);
 
 [[nodiscard]] inline MenuMaterialKind ResolveMenuMaterial(
     MenuMaterialKind selected) noexcept {
@@ -22,35 +20,27 @@ MakeActiveMenuBackdrop(MenuMaterialKind selected);
                                       : MenuMaterialKind::kSolid;
 }
 
-// Each popup retains its native backdrop. WinUI owns activation, transparency
-// availability and theme transitions; no composition polling or custom blur.
+// Each popup retains its native backdrop. Its material stays active without
+// activating the island; WinUI owns theme, accessibility and transparency
+// policy.
 class MenuMaterial {
  public:
-  [[nodiscard]] winrt::Microsoft::UI::Xaml::Media::SystemBackdrop
-  For(bool enabled, MenuMaterialKind selected, bool active_popup = false) {
-    if (!enabled)
+  [[nodiscard]] winrt::Microsoft::UI::Xaml::Media::SystemBackdrop For(
+      bool enabled,
+      MenuMaterialKind selected) {
+    selected = ResolveMenuMaterial(selected);
+    if (!enabled || selected == MenuMaterialKind::kSolid)
       return nullptr;
-    if (selected_ != selected || active_popup_ != active_popup) {
-      active_popup_ = active_popup;
+    if (selected_ != selected) {
       backdrop_ = nullptr;
       selected_ = selected;
     }
-    if (!backdrop_) {
-      namespace media = winrt::Microsoft::UI::Xaml::Media;
-      if (active_popup)
-        backdrop_ = MakeActiveMenuBackdrop(selected);
-      else if (selected == MenuMaterialKind::kMica)
-        backdrop_ = media::MicaBackdrop();
-      else if (selected == MenuMaterialKind::kAcrylic)
-        backdrop_ = media::DesktopAcrylicBackdrop();
-      else if (selected == MenuMaterialKind::kAcrylicThin)
-        backdrop_ = MakeAcrylicThinBackdrop();
-    }
+    if (!backdrop_)
+      backdrop_ = MakeMenuBackdrop(selected);
     return backdrop_;
   }
 
  private:
-  bool active_popup_ = false;
   MenuMaterialKind selected_ = MenuMaterialKind::kDefault;
   winrt::Microsoft::UI::Xaml::Media::SystemBackdrop backdrop_{nullptr};
 };

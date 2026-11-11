@@ -71,11 +71,17 @@ controls::Grid AppearanceSettings::Row(UiText key,
   label.VerticalAlignment(xaml::VerticalAlignment::Center);
   xaml::Automation::AutomationProperties::SetLabeledBy(control, label);
   row.Children().Append(label);
-  controls::Grid::SetColumn(control.as<xaml::FrameworkElement>(), 1);
-  row.Children().Append(control);
+  auto layout = control.as<xaml::FrameworkElement>();
+  if (const auto toggle = control.try_as<controls::ToggleSwitch>())
+    layout = style_.Toggle(toggle);
+  else if (const auto dropdown = control.try_as<controls::ComboBox>())
+    style_.Dropdown(dropdown);
+  controls::Grid::SetColumn(layout, 1);
+  row.Children().Append(layout);
   SettingRow entry{.grid = row,
                    .label = label,
-                   .control = control.as<xaml::FrameworkElement>()};
+                   .control = layout,
+                   .input = control.as<xaml::FrameworkElement>()};
   entry.resized = row.SizeChanged(winrt::auto_revoke,
                                   [this](auto&&, auto&&) { ReflowRows(); });
   rows_.push_back(std::move(entry));
@@ -178,6 +184,18 @@ AppearanceSettings::AppearanceSettings(ViewContext& context,
           context_.delegate.OnAppearanceEdited(
               {AppearanceOption::kSearchBarMenuBackdrop,
                search_bar_menu_backdrop_.IsOn() ? 1u : 0u});
+      });
+  for (auto& item : new_tab_choices_) {
+    item = controls::ComboBoxItem();
+    new_tab_.Items().Append(item);
+  }
+  groups_[0].Children().Append(Row(UiText::kSettingsNewTabBehavior, new_tab_));
+  new_tab_changed_ =
+      new_tab_.SelectionChanged(winrt::auto_revoke, [this](auto&&, auto&&) {
+        if (!reconciling_ && new_tab_.SelectedIndex() >= 0)
+          context_.delegate.OnAppearanceEdited(
+              {AppearanceOption::kNewTabBehavior,
+               static_cast<std::uint32_t>(new_tab_.SelectedIndex())});
       });
   groups_[0].Children().Append(Text(UiText::kSettingsMenuHelp));
   groups_[1].Children().Append(Text(UiText::kHorizontalTabs));
@@ -415,6 +433,7 @@ void AppearanceSettings::Render(const ShellViewModel::SettingsVm& vm,
       case UiText::kSettingsMenuHelp:
       case UiText::kSettingsSearchBarBehavior:
       case UiText::kSettingsSearchBarMenuBackdrop:
+      case UiText::kSettingsNewTabBehavior:
       case UiText::kSettingsHover:
       case UiText::kSettingsHoverHelp:
         visible = vm.state.appearance_editable;
@@ -460,6 +479,19 @@ void AppearanceSettings::Render(const ShellViewModel::SettingsVm& vm,
       vm.appearance.flags.Has(AppearanceFlag::kSearchBarMenuBackdrop));
   Accessible(search_bar_menu_backdrop_,
              NativeText(UiText::kSettingsSearchBarMenuBackdrop, text));
+  constexpr std::array new_tab_labels{UiText::kNewTabOpensSearchBar,
+                                      UiText::kNewTabOpensPage};
+  for (std::size_t i = 0; i < new_tab_labels.size(); ++i)
+    new_tab_choices_[i].Content(
+        winrt::box_value(NativeText(new_tab_labels[i], text)));
+  new_tab_.IsEnabled(vm.state.appearance_editable);
+  const auto new_tab =
+      static_cast<int>(vm.appearance.flags.Has(AppearanceFlag::kNewTabPage)
+                           ? NewTabBehavior::kNewTabPage
+                           : NewTabBehavior::kSearchBar);
+  if (new_tab_.SelectedIndex() != new_tab)
+    new_tab_.SelectedIndex(new_tab);
+  Accessible(new_tab_, NativeText(UiText::kSettingsNewTabBehavior, text));
   scheme_.IsEnabled(vm.state.appearance_editable);
   material_.IsEnabled(vm.state.appearance_editable);
   icon_pack_.IsEnabled(vm.state.icon_pack_editable);
@@ -538,7 +570,7 @@ bool AppearanceSettings::Focus(UiText key) {
       for (const auto& row : rows_)
         if (row.label == label.label) {
           row.grid.StartBringIntoView();
-          return row.control.Focus(xaml::FocusState::Programmatic);
+          return row.input.Focus(xaml::FocusState::Programmatic);
         }
   return false;
 }

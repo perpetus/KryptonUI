@@ -200,6 +200,7 @@ class Store {
   }
   void CloseSettings();
   void SelectSettingsSection(SettingsSection section);
+  void ToggleSettingsNavigation();
   [[nodiscard]] const AppearancePrefs& appearance_prefs() const noexcept {
     return appearance_;
   }

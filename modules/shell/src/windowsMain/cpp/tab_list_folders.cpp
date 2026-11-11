@@ -2,7 +2,6 @@
 #include <winrt/Microsoft.UI.Xaml.Input.h>
 
 #include <algorithm>
-#include <bit>
 
 #include "krypton/ui/presentation/folder_menu.hpp"
 #include "tab_list.hpp"
@@ -10,29 +9,6 @@
 namespace kr::win {
 using xaml::Thickness;
 using xaml::Visibility;
-void TabList::ReportFolderDrop(FolderId id) {
-  const auto folder = context_.delegate.OnFolderRequested(id);
-  const auto record = folder_records_.find(id);
-  if (!folder || record == folder_records_.end())
-    return;
-  std::uint32_t position = 0;
-  if (!items_.IndexOf(record->second.item, position))
-    return;
-  std::size_t order = 0;
-  for (std::uint32_t i = 0; i < position; ++i) {
-    const auto item = items_.GetAt(i).as<foundation::IPropertyValue>();
-    if (item.Type() != foundation::PropertyType::Int64)
-      continue;
-    const auto other = context_.delegate.OnFolderRequested(
-        FolderId{std::bit_cast<std::uint64_t>(item.GetInt64())});
-    if (other && other->parent == folder->parent)
-      ++order;
-  }
-  (void)context_.delegate.OnFolderCommand({.kind = FolderCommandKind::kMove,
-                                           .folder = id,
-                                           .parent = folder->parent,
-                                           .index = order});
-}
 void TabList::UpdateFolderRow(FolderRecord& record) {
   if (!record.row)
     return;

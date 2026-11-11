@@ -24,6 +24,7 @@
 #include "boost_editor.hpp"
 #include "browser_tools_window.hpp"
 #include "chrome_header.hpp"
+#include "chrome_reveal.hpp"
 #include "command_bar.hpp"
 #include "delayed_tasks.hpp"
 #include "floating_chrome.hpp"
@@ -52,6 +53,7 @@
 #include "theme_editor.hpp"
 #include "top_chrome.hpp"
 #include "transient_surface.hpp"
+#include "url_drop_target.hpp"
 #include "winui_runtime.hpp"
 #include "workspace_editor.hpp"
 
@@ -203,6 +205,9 @@ class WinUIShellView final : public ShellView {
                      const xaml::FrameworkElement& keep) {
                    if (!weak.expired())
                      sidebar_.DismissHoverPopups(keep);
+                 },
+                 [this](Point point, bool active) {
+                   (void)UrlDragChanged(point, active);
                  }},
         header_(CreateNativeComponent<ChromeHeader>("Chrome header",
                                                     context_,
@@ -305,6 +310,8 @@ class WinUIShellView final : public ShellView {
                                  winrt::to_hstring(result.error().message));
     WireRoot(false, events_[0]);
     WireRoot(true, events_[1]);
+    sidebar_drop_ = std::make_unique<UrlDropTarget>(context_, root_);
+    toolbar_drop_ = std::make_unique<UrlDropTarget>(context_, toolbar_root_);
   }
 
   ~WinUIShellView() override {
@@ -312,6 +319,8 @@ class WinUIShellView final : public ShellView {
     focus_.SetActive(false);
     lifetime_.reset();
     input_.Reset();
+    sidebar_drop_.reset();
+    toolbar_drop_.reset();
     for (auto& target : input_targets_)
       target.Reset();
     onboarding_.reset();
@@ -428,7 +437,13 @@ class WinUIShellView final : public ShellView {
               (!layout_.caption_overlay || layout_.caption_visible));
           !result)
         platform::WriteDefaultLog(LogLevel::kWarning, result.error().message);
-      top_chrome_.SetLayout(layout_, sidebar_.Root());
+      // Preserve outgoing rows until the whole toolbar has slid out. Applying
+      // the hidden layout here collapses them in the middle of the transition.
+      const bool toolbar_leaving =
+          !layout_.toolbar_visible && reveal_animated_[1] &&
+          toolbar_root_.Visibility() == xaml::Visibility::Visible;
+      if (!toolbar_leaving)
+        top_chrome_.SetLayout(layout_, sidebar_.Root());
       sidebar_.SetIconOnly(layout_.sidebar_icon_only);
       sidebar_.SetLibraryPlacement(layout_.tabs != TabLayout::kVertical,
                                    header_.LibrarySlot());
@@ -448,27 +463,33 @@ class WinUIShellView final : public ShellView {
       // Quality glass leaves steady chrome unpainted over the host's system
       // backdrop. Reveals that float over the page keep the opaque gradient.
       const bool clear = vm.theme.transparent_chrome;
-      sidebar_surface_.Update(layout_.sidebar, layout_.sidebar_island,
-                              layout_.sidebar_overlays, vm.theme.dark,
-                              brushes_.high_contrast());
-      toolbar_surface_.Update(layout_.toolbar, layout_.toolbar_island,
-                              layout_.toolbar_overlays, vm.theme.dark,
-                              brushes_.high_contrast());
       const auto border = brushes_.high_contrast()
                               ? brushes_.icon
                               : brushes_.For(Color{kTokens.compact.border});
-      root_.BorderBrush(border);
-      toolbar_root_.BorderBrush(border);
       const auto paint = [](const Grid& root, const media::Brush& brush) {
         if (root.Background() != brush)
           root.Background(brush);
       };
-      paint(root_, clear && !layout_.sidebar_overlays
-                       ? media::Brush(brushes_.transparent)
-                       : media::Brush(brushes_.sidebar_gradient));
-      paint(toolbar_root_, clear && !layout_.toolbar_overlays
-                               ? media::Brush(brushes_.transparent)
-                               : media::Brush(brushes_.toolbar_gradient));
+      // Hidden layout geometry is not the outgoing surface's geometry. Retain
+      // its margins, clipping, opaque floor and shadow until IslandHide runs.
+      if (layout_.sidebar_visible) {
+        sidebar_surface_.Update(layout_.sidebar, layout_.sidebar_island,
+                                layout_.sidebar_overlays, vm.theme.dark,
+                                brushes_.high_contrast());
+        root_.BorderBrush(border);
+        paint(root_, clear && !layout_.sidebar_overlays
+                         ? media::Brush(brushes_.transparent)
+                         : media::Brush(brushes_.sidebar_gradient));
+      }
+      if (layout_.toolbar_visible) {
+        toolbar_surface_.Update(layout_.toolbar, layout_.toolbar_island,
+                                layout_.toolbar_overlays, vm.theme.dark,
+                                brushes_.high_contrast());
+        toolbar_root_.BorderBrush(border);
+        paint(toolbar_root_, clear && !layout_.toolbar_overlays
+                                 ? media::Brush(brushes_.transparent)
+                                 : media::Brush(brushes_.toolbar_gradient));
+      }
     }
     if (vm.settings.state.open && !settings_)
       settings_ = std::make_unique<SettingsWindow>(parent_, context_);
@@ -507,14 +528,16 @@ class WinUIShellView final : public ShellView {
         toolbar_backdrop_.Root(),
         std::max(1,
                  static_cast<int>(toolbar_root_.ColumnDefinitions().Size())));
-    sidebar_backdrop_.Render(
-        vm.theme, client_, layout_.sidebar,
-        brushes_.high_contrast() ||
-            (vm.theme.transparent_chrome && !layout_.sidebar_overlays));
-    toolbar_backdrop_.Render(
-        vm.theme, client_, layout_.toolbar,
-        brushes_.high_contrast() ||
-            (vm.theme.transparent_chrome && !layout_.toolbar_overlays));
+    if (layout_.sidebar_visible)
+      sidebar_backdrop_.Render(
+          vm.theme, client_, layout_.sidebar,
+          brushes_.high_contrast() ||
+              (vm.theme.transparent_chrome && !layout_.sidebar_overlays));
+    if (layout_.toolbar_visible)
+      toolbar_backdrop_.Render(
+          vm.theme, client_, layout_.toolbar,
+          brushes_.high_contrast() ||
+              (vm.theme.transparent_chrome && !layout_.toolbar_overlays));
     mark(2);
     header_.Render(vm);
     mark(3);
@@ -744,6 +767,13 @@ class WinUIShellView final : public ShellView {
   bool OwnsWindowFrame() const noexcept override { return true; }
 
   bool ProcessNativeMessage(const MSG& native) {
+    if ((native.message == WM_KEYDOWN || native.message == WM_SYSKEYDOWN) &&
+        native.wParam == VK_ESCAPE && tabs_.IsDragging()) {
+      // Escape ends a sidebar drag. Consume it here, before the key hand-back
+      // below would retarget it to the page.
+      tabs_.CancelDrag();
+      return true;
+    }
     if (native.message == WM_IME_STARTCOMPOSITION)
       composing_ = true;
     if (native.message == WM_IME_ENDCOMPOSITION) {
@@ -1017,6 +1047,11 @@ class WinUIShellView final : public ShellView {
     return false;
   }
 
+  bool BrowserToolsOwnInput() const noexcept {
+    return (permission_prompt_ && permission_prompt_->OwnsInput()) ||
+           (permission_manager_ && permission_manager_->OwnsInput()) ||
+           (task_manager_ && task_manager_->OwnsInput());
+  }
   void SyncFocusSurfaces(bool inspect_popups = true) {
     focus_.SetSurface(FocusSurface::kMenu, menu_.IsOpen());
     focus_.SetSurface(FocusSurface::kSearch, command_bar_.IsOpen());
@@ -1024,18 +1059,19 @@ class WinUIShellView final : public ShellView {
                       theme_editor_.IsOpen() ||
                           (boost_editor_ && boost_editor_->OwnsInput()));
     focus_.SetSurface(FocusSurface::kLibrary, library_.OwnsInput());
-    focus_.SetSurface(
-        FocusSurface::kModal,
-        modal_open_ || (boost_editor_ && boost_editor_->OwnsInput()));
+    focus_.SetSurface(FocusSurface::kModal,
+                      modal_open_ || BrowserToolsOwnInput() ||
+                          (boost_editor_ && boost_editor_->OwnsInput()));
     if (inspect_popups)
       focus_.SetSurface(FocusSurface::kFlyout, HasOpenFlyouts());
   }
 
   bool HoverPopupAllowed(const xaml::FrameworkElement& preview,
                          bool active) const {
-    if (modal_open_ || (boost_editor_ && boost_editor_->OwnsInput()) ||
-        composing_ || menu_.IsOpen() || command_bar_.IsOpen() ||
-        theme_editor_.IsOpen() || library_.OwnsInput() ||
+    if (modal_open_ || BrowserToolsOwnInput() || url_drag_active_ ||
+        (boost_editor_ && boost_editor_->OwnsInput()) || composing_ ||
+        menu_.IsOpen() || command_bar_.IsOpen() || theme_editor_.IsOpen() ||
+        library_.OwnsInput() ||
         GetAncestor(GetForegroundWindow(), GA_ROOTOWNER) !=
             GetAncestor(parent_, GA_ROOTOWNER))
       return false;
@@ -1067,8 +1103,9 @@ class WinUIShellView final : public ShellView {
   }
 
   bool WorkspaceGesturesAllowed() const {
-    return !modal_open_ && !(boost_editor_ && boost_editor_->OwnsInput()) &&
-           !composing_ && layout_.sidebar_visible && !menu_.IsOpen() &&
+    return !modal_open_ && !BrowserToolsOwnInput() && !url_drag_active_ &&
+           !(boost_editor_ && boost_editor_->OwnsInput()) && !composing_ &&
+           layout_.sidebar_visible && !menu_.IsOpen() &&
            !command_bar_.IsOpen() && !theme_editor_.IsOpen() &&
            !library_.OwnsInput() && !HasOpenFlyouts() &&
            GetAncestor(GetForegroundWindow(), GA_ROOTOWNER) ==
@@ -1080,6 +1117,7 @@ class WinUIShellView final : public ShellView {
     trace_.Record(InputTraceEvent::kActivation, GetFocus(), focus_.generation(),
                   active);
     if (!active) {
+      url_drag_active_ = false;
       pending_focus_.reset();
       composing_ = false;
       pointer_down_ = false;
@@ -1379,7 +1417,7 @@ class WinUIShellView final : public ShellView {
   }
 
   void QueueFocusReturn() {
-    if (!return_focus_ || focus_return_queued_)
+    if (!return_focus_ || focus_return_queued_ || url_drag_active_)
       return;
     SyncFocusSurfaces();
     focus_return_queued_ = true;
@@ -1415,13 +1453,13 @@ class WinUIShellView final : public ShellView {
     const HWND focus = GetFocus();
     // A drag or held press settles on its release.
     SyncFocusSurfaces();
-    if (!focus_.CanReturn(focus_.generation()) || composing_ || pointer_down_ ||
-        !target || !focus || !HostFocus(target) || !IsWindow(target) ||
-        !IsWindowVisible(target) || rendering_ || command_bar_.IsOpen() ||
-        theme_editor_.IsOpen() || menu_.IsOpen() || GetCapture() ||
-        GetKeyState(VK_LBUTTON) < 0 || GetKeyState(VK_RBUTTON) < 0 ||
-        GetKeyState(VK_MBUTTON) < 0 || GetKeyState(VK_XBUTTON1) < 0 ||
-        GetKeyState(VK_XBUTTON2) < 0)
+    if (url_drag_active_ || !focus_.CanReturn(focus_.generation()) ||
+        composing_ || pointer_down_ || !target || !focus ||
+        !HostFocus(target) || !IsWindow(target) || !IsWindowVisible(target) ||
+        rendering_ || command_bar_.IsOpen() || theme_editor_.IsOpen() ||
+        menu_.IsOpen() || GetCapture() || GetKeyState(VK_LBUTTON) < 0 ||
+        GetKeyState(VK_RBUTTON) < 0 || GetKeyState(VK_MBUTTON) < 0 ||
+        GetKeyState(VK_XBUTTON1) < 0 || GetKeyState(VK_XBUTTON2) < 0)
       return;
     if (focus == target)
       return;
@@ -1466,6 +1504,23 @@ class WinUIShellView final : public ShellView {
     }
   }
 
+  bool UrlDragChanged(Point point, bool active) override {
+    if (!active && ((sidebar_drop_ && sidebar_drop_->IsReadingDrop()) ||
+                    (toolbar_drop_ && toolbar_drop_->IsReadingDrop())))
+      return false;
+    url_drag_active_ = active;
+    url_drag_point_ = point;
+    if (active)
+      tabs_.DismissHover();
+    QueueHoverRefresh();
+    if (!active)
+      QueueFocusReturn();
+    return active &&
+           ((layout_.sidebar_visible && layout_.sidebar.Contains(point)) ||
+            (layout_.toolbar_visible && layout_.toolbar.Contains(point)) ||
+            layout_.sidebar_hover.Contains(point) ||
+            layout_.toolbar_hover.Contains(point));
+  }
   void QueueHoverRefresh() {
     if (hover_refresh_queued_)
       return;
@@ -1482,11 +1537,14 @@ class WinUIShellView final : public ShellView {
       POINT cursor{};
       if (!GetCursorPos(&cursor) || !ScreenToClient(parent_, &cursor))
         return;
-      const Point point{static_cast<float>(cursor.x) / scale_,
-                        static_cast<float>(cursor.y) / scale_};
-      const bool keep_open = menu_.IsOpen() || command_bar_.IsOpen() ||
-                             tabs_.IsPreviewOpen() || theme_editor_.IsOpen() ||
-                             library_.OwnsInput() || HasOpenFlyouts();
+      const Point point = url_drag_active_
+                              ? url_drag_point_
+                              : Point{static_cast<float>(cursor.x) / scale_,
+                                      static_cast<float>(cursor.y) / scale_};
+      const bool keep_open = BrowserToolsOwnInput() || menu_.IsOpen() ||
+                             command_bar_.IsOpen() || tabs_.IsPreviewOpen() ||
+                             theme_editor_.IsOpen() || library_.OwnsInput() ||
+                             HasOpenFlyouts();
       const bool sidebar_revealable =
           !layout_.sidebar.empty() &&
           (!layout_.sidebar_visible || layout_.sidebar_overlays);
@@ -1587,12 +1645,23 @@ class WinUIShellView final : public ShellView {
                    float scale) {
     // A transparent XAML root still leaves the native child surface present.
     // Hide that surface too; host messages already drive edge-hover reveals.
+    const auto index = source == source_ ? 0u : 1u;
     if (!visible || region.empty()) {
       ReleaseFocus(WindowOf(source), return_focus_, parent_);
+      if (root.Visibility() == xaml::Visibility::Collapsed)
+        return;
       const auto bridge = source.SiteBridge();
-      hide.Hide(WindowOf(source), root.DispatcherQueue(),
-                [bridge] { bridge.Hide(); });
-      root.Visibility(xaml::Visibility::Collapsed);
+      root.IsHitTestVisible(false);
+      reveals_[index].Hide(
+          reveal_animated_[index] && motion_.Enabled(brushes_.high_contrast()),
+          [this, weak = std::weak_ptr<int>(lifetime_), index, root, bridge,
+           window = WindowOf(source)] {
+            if (weak.expired())
+              return;
+            island_hide_[index].Hide(window, root.DispatcherQueue(),
+                                     [bridge] { bridge.Hide(); });
+            root.Visibility(xaml::Visibility::Collapsed);
+          });
       return;
     }
     hide.BeforeShow();
@@ -1607,6 +1676,23 @@ class WinUIShellView final : public ShellView {
     root.Visibility(xaml::Visibility::Visible);
     const auto width = std::max(1, px(island.right()) - left);
     const auto height = std::max(1, px(island.bottom()) - top);
+    root.IsHitTestVisible(true);
+    reveal_animated_[index] =
+        source == source_ ? layout_.sidebar_overlays : layout_.toolbar_overlays;
+    const auto distance =
+        source == source_ ? winrt::Windows::Foundation::Numerics::
+                                float3{layout_.sidebar_on_right ? island.width
+                                                                : -island.width,
+                                       0, 0}
+                          : winrt::Windows::Foundation::Numerics::float3{
+                                0, -island.height, 0};
+    // The wrapper owns the opaque floor and shadow as well as the XAML chrome.
+    // Moving only its content leaves a stationary duplicate behind it.
+    const auto& reveal_root =
+        source == source_ ? sidebar_surface_.Root() : toolbar_surface_.Root();
+    reveals_[index].Show(
+        reveal_root, distance,
+        reveal_animated_[index] && motion_.Enabled(brushes_.high_contrast()));
     source.SiteBridge().MoveAndResize({left, top, width, height});
     // A full-width lower row requires a full-width HWND. Its upper corner
     // must leave native caption controls outside both painting and hit testing.
@@ -1768,7 +1854,12 @@ class WinUIShellView final : public ShellView {
   std::uint64_t notification_serial_ = 0;
   ThemeBackdrop sidebar_backdrop_, toolbar_backdrop_;
   Grid root_, toolbar_root_;
+  std::unique_ptr<UrlDropTarget> sidebar_drop_, toolbar_drop_;
+  bool url_drag_active_ = false;
+  Point url_drag_point_;
   FloatingChrome sidebar_surface_, toolbar_surface_;
+  std::array<ChromeReveal, 2> reveals_;
+  std::array<bool, 2> reveal_animated_{};
   hosting::DesktopWindowXamlSource source_{nullptr}, toolbar_source_{nullptr};
   hosting::DesktopWindowXamlSource menu_source_{nullptr};
   Grid menu_root_{nullptr};

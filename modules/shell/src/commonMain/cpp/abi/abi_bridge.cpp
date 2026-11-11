@@ -51,6 +51,8 @@ static_assert(std::to_underlying(AppearanceFlag::kSearchBarFloatingOnType) ==
               KR_APPEARANCE_SEARCH_BAR_FLOATING_ON_TYPE);
 static_assert(std::to_underlying(AppearanceFlag::kSearchBarMenuBackdrop) ==
               KR_APPEARANCE_SEARCH_BAR_MENU_BACKDROP);
+static_assert(std::to_underlying(AppearanceFlag::kNewTabPage) ==
+              KR_APPEARANCE_NEW_TAB_PAGE);
 
 static_assert(std::to_underlying(LayoutFlag::kCompactTargetsExplicit) ==
               KR_LAYOUT_COMPACT_TARGETS_EXPLICIT);
@@ -672,7 +674,8 @@ void FillShellUi(Shell* shell, KrShellUI& output) {
                                KR_APPEARANCE_HIDE_HOVER_MEMORY |
                                KR_APPEARANCE_ATTACHED_SEARCH_BAR |
                                KR_APPEARANCE_SEARCH_BAR_FLOATING_ON_TYPE |
-                               KR_APPEARANCE_SEARCH_BAR_MENU_BACKDROP)),
+                               KR_APPEARANCE_SEARCH_BAR_MENU_BACKDROP |
+                               KR_APPEARANCE_NEW_TAB_PAGE)),
            .icon_pack = static_cast<IconPack>(icon_pack),
            .glass_mode = static_cast<GlassMode>(glass_mode)},
           icon_pack_supplied);
@@ -802,6 +805,16 @@ void FillShellUi(Shell* shell, KrShellUI& output) {
   abi::FillMultiPageUi(ui);
   abi::FillGlassUi(ui);
   abi::FillFolderUi(ui);
+  ui.dismiss_site_permissions = [](void* self) noexcept {
+    Guard("dismiss_site_permissions",
+          [&] { AsShell(self).OnSitePermissionsDismissed(); });
+  };
+  ui.url_drag_changed = [](void* self, float x, float y, bool active) noexcept {
+    bool accepted = false;
+    Guard("url_drag_changed",
+          [&] { accepted = AsShell(self).UrlDragChanged({x, y}, active); });
+    return accepted;
+  };
   std::memcpy(&output, &ui, ui.struct_size);
 }
 

@@ -45,6 +45,8 @@ std::vector<std::string> Titles(std::span<const TabItemVm> items) {
 }
 
 class HeadlessShellView final : public ShellView {
+  bool UrlDragChanged(Point, bool) override { return false; }
+
  public:
   Result<void> RegisterGlassBackdrop(const GlassBackdropResource&) override {
     return Fail(ErrorCode::kUnsupported, "Headless graphics");

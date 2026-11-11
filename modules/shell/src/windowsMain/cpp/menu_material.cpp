@@ -19,141 +19,118 @@ namespace xaml = winrt::Microsoft::UI::Xaml;
 namespace media = winrt::Microsoft::UI::Xaml::Media;
 using Target = composition::ICompositionSupportsSystemBackdrop;
 
-// DesktopAcrylicBackdrop does not expose Kind. Follow its upstream target
-// lifecycle, using WinUI's default configuration for activation/theme policy.
-struct AcrylicThinBackdrop : media::SystemBackdropT<AcrylicThinBackdrop> {
+// Transient islands can remain input-inactive while their browser is active.
+// Follow WinUI's live theme/accessibility policy in a separate configuration,
+// so island activation cannot put the material into its inactive fallback.
+// This never changes native or XAML keyboard focus.
+struct MenuBackdrop : media::SystemBackdropT<MenuBackdrop> {
+  explicit MenuBackdrop(MenuMaterialKind selected) : selected(selected) {}
+
   struct Entry {
-    Entry(const Target& value,
-          const backdrops::SystemBackdropConfiguration& configuration)
-        : target(value) {
-      try {
-        controller.Kind(backdrops::DesktopAcrylicKind::Thin);
-        controller.AddSystemBackdropTarget(target);
-        controller.SetSystemBackdropConfiguration(configuration);
-      } catch (...) {
-        Close();
-        throw;
-      }
+    Entry(const Target& target,
+          const backdrops::SystemBackdropConfiguration& defaults)
+        : target(target), defaults(defaults) {
+      configuration.IsInputActive(true);
+      Refresh();
     }
     ~Entry() { Close(); }
     Entry(const Entry&) = delete;
     Entry& operator=(const Entry&) = delete;
 
-    void Close() noexcept {
-      try {
-        controller.RemoveSystemBackdropTarget(target);
-      } catch (...) {
-        platform::WriteDefaultLog(LogLevel::kWarning,
-                                  "Menu acrylic target could not detach");
-      }
-      try {
-        controller.Close();
-      } catch (...) {
-        platform::WriteDefaultLog(LogLevel::kWarning,
-                                  "Menu acrylic controller could not close");
-      }
-    }
-
-    Target target{nullptr};
-    backdrops::DesktopAcrylicController controller;
-  };
-
-  void OnTargetConnected(const Target& target,
-                         const winrt::Microsoft::UI::Xaml::XamlRoot& root) {
-    SystemBackdropT::OnTargetConnected(target, root);
-    const auto configuration =
-        GetDefaultSystemBackdropConfiguration(target, root);
-    entries.push_back(std::make_unique<Entry>(target, configuration));
-  }
-
-  void OnTargetDisconnected(const Target& target) {
-    SystemBackdropT::OnTargetDisconnected(target);
-    std::erase_if(entries,
-                  [&](const auto& entry) { return entry->target == target; });
-  }
-
-  std::vector<std::unique_ptr<Entry>> entries;
-};
-// Owned popup targets do not receive top-level activation. Their lifetime is
-// already scoped to an active browser interaction, so use an active material
-// configuration rather than the island input site's inactive fallback color.
-struct ActiveMenuBackdrop : media::SystemBackdropT<ActiveMenuBackdrop> {
-  explicit ActiveMenuBackdrop(MenuMaterialKind selected) : selected(selected) {}
-  struct Entry {
-    Entry(const Target& value,
-          const xaml::XamlRoot& root,
-          MenuMaterialKind selected)
-        : target(value) {
-      configuration.IsInputActive(true);
-      if (const auto element =
-              root.Content().try_as<xaml::FrameworkElement>()) {
-        Theme(element);
-        themed = element.ActualThemeChanged(
-            winrt::auto_revoke, [this](const xaml::FrameworkElement& element,
-                                       auto&&) { Theme(element); });
-      }
+    void Connect(MenuMaterialKind selected) {
       if (selected == MenuMaterialKind::kMica) {
         mica = backdrops::MicaController();
-        mica.AddSystemBackdropTarget(target);
         mica.SetSystemBackdropConfiguration(configuration);
+        mica.AddSystemBackdropTarget(target);
       } else {
         acrylic = backdrops::DesktopAcrylicController();
         acrylic.Kind(selected == MenuMaterialKind::kAcrylicThin
                          ? backdrops::DesktopAcrylicKind::Thin
                          : backdrops::DesktopAcrylicKind::Base);
-        acrylic.AddSystemBackdropTarget(target);
         acrylic.SetSystemBackdropConfiguration(configuration);
+        acrylic.AddSystemBackdropTarget(target);
       }
     }
-    ~Entry() {
-      themed.revoke();
-      try {
-        if (mica) {
+
+    void Refresh() {
+      configuration.Theme(defaults.Theme());
+      configuration.HighContrastBackgroundColor(
+          defaults.HighContrastBackgroundColor());
+      configuration.IsHighContrast(defaults.IsHighContrast());
+    }
+
+    void Close() noexcept {
+      if (mica) {
+        try {
           mica.RemoveSystemBackdropTarget(target);
+        } catch (...) {
+          platform::WriteDefaultLog(LogLevel::kWarning,
+                                    "Menu mica target could not detach");
+        }
+        try {
           mica.Close();
+        } catch (...) {
+          platform::WriteDefaultLog(LogLevel::kWarning,
+                                    "Menu mica controller could not close");
         }
-      } catch (...) {
       }
-      try {
-        if (acrylic) {
+      if (acrylic) {
+        try {
           acrylic.RemoveSystemBackdropTarget(target);
-          acrylic.Close();
+        } catch (...) {
+          platform::WriteDefaultLog(LogLevel::kWarning,
+                                    "Menu acrylic target could not detach");
         }
-      } catch (...) {
+        try {
+          acrylic.Close();
+        } catch (...) {
+          platform::WriteDefaultLog(LogLevel::kWarning,
+                                    "Menu acrylic controller could not close");
+        }
       }
     }
-    void Theme(const xaml::FrameworkElement& element) {
-      configuration.Theme(element.ActualTheme() == xaml::ElementTheme::Dark
-                              ? backdrops::SystemBackdropTheme::Dark
-                              : backdrops::SystemBackdropTheme::Light);
-    }
+
     Target target{nullptr};
+    backdrops::SystemBackdropConfiguration defaults{nullptr};
     backdrops::SystemBackdropConfiguration configuration;
     backdrops::MicaController mica{nullptr};
     backdrops::DesktopAcrylicController acrylic{nullptr};
-    xaml::FrameworkElement::ActualThemeChanged_revoker themed;
   };
+
   void OnTargetConnected(const Target& target, const xaml::XamlRoot& root) {
     SystemBackdropT::OnTargetConnected(target, root);
-    entries.push_back(std::make_unique<Entry>(target, root, selected));
+    auto entry = std::make_unique<Entry>(
+        target, GetDefaultSystemBackdropConfiguration(target, root));
+    entry->Connect(selected);
+    entries.push_back(std::move(entry));
   }
+
+  void OnDefaultSystemBackdropConfigurationChanged(const Target& target,
+                                                   const xaml::XamlRoot& root) {
+    SystemBackdropT::OnDefaultSystemBackdropConfigurationChanged(target, root);
+    // Copy theme/accessibility changes without forwarding the transient
+    // island's inactive state to a visible menu's controller.
+    for (const auto& entry : entries)
+      if (entry->target == target) {
+        entry->Refresh();
+        break;
+      }
+  }
+
   void OnTargetDisconnected(const Target& target) {
-    SystemBackdropT::OnTargetDisconnected(target);
     std::erase_if(entries,
                   [&](const auto& entry) { return entry->target == target; });
+    SystemBackdropT::OnTargetDisconnected(target);
   }
+
   MenuMaterialKind selected;
   std::vector<std::unique_ptr<Entry>> entries;
 };
 }  // namespace
 
-winrt::Microsoft::UI::Xaml::Media::SystemBackdrop MakeAcrylicThinBackdrop() {
-  return winrt::make<AcrylicThinBackdrop>()
-      .as<winrt::Microsoft::UI::Xaml::Media::SystemBackdrop>();
-}
-winrt::Microsoft::UI::Xaml::Media::SystemBackdrop MakeActiveMenuBackdrop(
+winrt::Microsoft::UI::Xaml::Media::SystemBackdrop MakeMenuBackdrop(
     MenuMaterialKind selected) {
-  return winrt::make<ActiveMenuBackdrop>(selected)
+  return winrt::make<MenuBackdrop>(selected)
       .as<winrt::Microsoft::UI::Xaml::Media::SystemBackdrop>();
 }
 }  // namespace kr::win

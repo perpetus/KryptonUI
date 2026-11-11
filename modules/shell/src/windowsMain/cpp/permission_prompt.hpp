@@ -10,6 +10,7 @@ class PermissionPromptView {
   PermissionPromptView(HWND parent, ViewContext& context);
   ~PermissionPromptView();
   void Render(const ShellViewModel& vm);
+  [[nodiscard]] bool OwnsInput() const noexcept { return open_; }
 
  private:
   void Build();
@@ -22,8 +23,7 @@ class PermissionPromptView {
   xaml::Style accent_{nullptr};
   std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
   controls::Primitives::Popup popup_;
-  controls::Grid layers_, content_;
-  controls::SystemBackdropElement backdrop_;
+  controls::Grid content_;
   controls::FlyoutPresenter surface_;
   controls::ScrollViewer scroll_;
   controls::TextBlock origin_, title_, embedding_, message_;

@@ -102,18 +102,17 @@ void PermissionPromptView::Build() {
   surface_.CornerRadius(UniformCorners(t.prompt_radius));
   surface_.BorderThickness(UniformThickness(kTokens.menu.border_width));
   surface_.BorderBrush(context_.brushes.menu_border);
-  backdrop_.CornerRadius(surface_.CornerRadius());
-  backdrop_.IsHitTestVisible(false);
-  layers_.Children().Append(backdrop_);
-  layers_.Children().Append(surface_);
-  popup_.Child(layers_);
+  popup_.Child(surface_);
   popup_.IsLightDismissEnabled(true);
-  popup_.ShouldConstrainToRootBounds(true);
+  // Native windowed popups provide the backdrop target; PositionAndOpen()
+  // retains the prompt's existing client-viewport bounds.
+  popup_.ShouldConstrainToRootBounds(false);
   const std::weak_ptr<int> weak = lifetime_;
   closed_ = popup_.Closed(winrt::auto_revoke, [this, weak](auto&&, auto&&) {
     if (!weak.expired() && open_ && !popup_.IsOpen()) {
       open_ = false;
       island_.Hide();
+      context_.hover_changed();
       context_.delegate.OnPermissionPromptDecision(
           request_, PermissionDecision::kDismiss);
     }
@@ -122,6 +121,7 @@ void PermissionPromptView::Build() {
     if (!weak.expired() && open_) {
       island_.Raise();
       block_->control.Focus(xaml::FocusState::Programmatic);
+      context_.hover_changed();
     }
   });
   key_ = content_.KeyDown(
@@ -163,6 +163,7 @@ void PermissionPromptView::Close() noexcept {
   try {
     popup_.IsOpen(false);
     island_.Hide();
+    context_.hover_changed();
   } catch (...) {
     platform::WriteDefaultLog(LogLevel::kWarning,
                               "Permission prompt could not close");
@@ -188,16 +189,14 @@ void PermissionPromptView::Render(const ShellViewModel& vm) {
   const bool changed = revision_ != vm.browser_tools.prompt_revision;
   const auto theme =
       vm.theme.dark ? xaml::ElementTheme::Dark : xaml::ElementTheme::Light;
-  layers_.RequestedTheme(theme);
+  popup_.RequestedTheme(theme);
   surface_.RequestedTheme(theme);
-  backdrop_.RequestedTheme(theme);
   content_.FlowDirection(vm.text.right_to_left
                              ? xaml::FlowDirection::RightToLeft
                              : xaml::FlowDirection::LeftToRight);
   surface_.Background(context_.brushes.menu_background);
-  backdrop_.SystemBackdrop(
-      material_.For(context_.brushes.menu_backdrop_enabled(),
-                    context_.brushes.menu_material()));
+  popup_.SystemBackdrop(material_.For(context_.brushes.menu_backdrop_enabled(),
+                                      context_.brushes.menu_material()));
   origin_.Foreground(context_.brushes.text);
   title_.Foreground(context_.brushes.muted);
   embedding_.Foreground(context_.brushes.muted);

@@ -68,6 +68,7 @@ class Shell final : public ShellViewDelegate {
   [[nodiscard]] Result<void> RemoveSitePermission(PermissionId id);
   [[nodiscard]] Result<void> ShowPermissionPrompt(PermissionPrompt value);
   void DismissPermissionPrompt(std::uint64_t request);
+  [[nodiscard]] bool UrlDragChanged(Point point, bool active);
   void OnTaskManagerDismissed() override;
   void OnTaskSearchChanged(std::string_view text) override;
   void OnTaskFilterChanged(TaskFilter filter) override;
@@ -162,6 +163,7 @@ class Shell final : public ShellViewDelegate {
   void OnSettingsDismissed() override;
   void OnSettingsDeactivated() override;
   void OnSettingsSectionSelected(SettingsSection section) override;
+  void OnSettingsNavigationToggled() override;
   void OnAppearanceEdited(AppearanceEdit edit) override;
   [[nodiscard]] bool CanRequestGlassBackdrop() const override;
   void OnGlassBackdropRequested(const GlassBackdropRequest& request) override;
@@ -244,13 +246,14 @@ class Shell final : public ShellViewDelegate {
   void OnTabDropped(TabId tab,
                     TabId previous,
                     TabId next,
-                    std::optional<bool> pinned) override;
+                    TabDropSection section) override;
   [[nodiscard]] std::uint32_t OnTabPreviewRequested(TabId tab) override;
   void OnTabPreviewDismissed(std::uint32_t request_id) override;
   void SetTabPreview(std::uint32_t request_id,
                      TabId tab,
                      const TabPreviewData& data);
   void OnNewTab() override;
+  void OnUrlDropped(std::string_view url) override;
   void OnSpaceSelected(SpaceId space) override;
   [[nodiscard]] bool OnWorkspaceSwipe(WorkspaceSwipeInput input) override;
   void OnNavCommand(NavCommand command) override;

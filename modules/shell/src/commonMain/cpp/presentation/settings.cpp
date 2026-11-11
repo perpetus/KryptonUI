@@ -242,6 +242,13 @@ Result<AppearancePrefs> EditAppearance(AppearancePrefs prefs,
         return Fail(ErrorCode::kInvalidArgument, "Invalid search bar backdrop");
       prefs.flags.Set(AppearanceFlag::kSearchBarMenuBackdrop, edit.value != 0);
       break;
+    case AppearanceOption::kNewTabBehavior:
+      if (edit.value > std::to_underlying(NewTabBehavior::kNewTabPage))
+        return Fail(ErrorCode::kInvalidArgument, "Invalid new tab behavior");
+      prefs.flags.Set(
+          AppearanceFlag::kNewTabPage,
+          edit.value == std::to_underlying(NewTabBehavior::kNewTabPage));
+      break;
     case AppearanceOption::kSearchBarBehavior:
       if (edit.value >
           static_cast<std::uint32_t>(SearchBarBehavior::kAlwaysFloating))
