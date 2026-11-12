@@ -268,7 +268,8 @@ class WinUIShellView final : public ShellView {
       winrt::check_bool(
           target
               .Initialize(winrt::Microsoft::UI::GetWindowFromWindowId(
-                  source.SiteBridge().WindowId()))
+                              source.SiteBridge().WindowId()),
+                          root)
               .has_value());
     };
     initialize(source_, sidebar_surface_.Root(), input_targets_[0]);
@@ -952,7 +953,8 @@ class WinUIShellView final : public ShellView {
       winrt::check_bool(
           input_targets_[2]
               .Initialize(winrt::Microsoft::UI::GetWindowFromWindowId(
-                  menu_source_.SiteBridge().WindowId()))
+                              menu_source_.SiteBridge().WindowId()),
+                          menu_root_)
               .has_value());
     }
     menu_root_.RequestedTheme(root_.RequestedTheme());
@@ -1037,13 +1039,14 @@ class WinUIShellView final : public ShellView {
 
  private:
   bool HasOpenFlyouts() const {
-    for (const auto& root : {root_, toolbar_root_, menu_root_})
-      if (root && root.XamlRoot())
-        for (const auto& popup :
-             media::VisualTreeHelper::GetOpenPopupsForXamlRoot(root.XamlRoot()))
-          // Tooltips are passive and do not own keyboard input.
-          if (!popup.Child().try_as<controls::ToolTip>())
-            return true;
+    for (const auto& target : NativeInputTarget::Roots())
+      if (input_.Owns(target.window))
+        if (const auto root = target.XamlRoot())
+          for (const auto& popup :
+               media::VisualTreeHelper::GetOpenPopupsForXamlRoot(root))
+            // Tooltips are passive and do not own keyboard input.
+            if (!popup.Child().try_as<controls::ToolTip>())
+              return true;
     return false;
   }
 
@@ -1076,26 +1079,28 @@ class WinUIShellView final : public ShellView {
             GetAncestor(parent_, GA_ROOTOWNER))
       return false;
     bool owns_popup = false;
-    for (const auto& root : {root_, toolbar_root_, menu_root_})
-      if (root && root.XamlRoot())
-        for (const auto& popup :
-             media::VisualTreeHelper::GetOpenPopupsForXamlRoot(
-                 root.XamlRoot())) {
-          if (!popup.IsOpen() || popup.Child().try_as<controls::ToolTip>())
-            continue;
-          bool own = WithinRoot(preview, popup.Child());
-          // A flyout's logical content is available before its presenter has
-          // completed template realization and attached the visual parents.
-          for (auto child = popup.Child(); child && !own;) {
-            own = child == preview;
-            const auto content = child.try_as<controls::ContentControl>();
-            child = content ? content.Content().try_as<xaml::UIElement>()
-                            : xaml::UIElement{nullptr};
+    for (const auto& target : NativeInputTarget::Roots())
+      if (input_.Owns(target.window))
+        if (const auto root = target.XamlRoot())
+          for (const auto& popup :
+               media::VisualTreeHelper::GetOpenPopupsForXamlRoot(root)) {
+            // The native popup may still own input during its closing phase.
+            // GetOpenPopupsForXamlRoot retains it until that phase finishes.
+            if (popup.Child().try_as<controls::ToolTip>())
+              continue;
+            bool own = WithinRoot(preview, popup.Child());
+            // A flyout's logical content is available before its presenter has
+            // completed template realization and attached the visual parents.
+            for (auto child = popup.Child(); child && !own;) {
+              own = child == preview;
+              const auto content = child.try_as<controls::ContentControl>();
+              child = content ? content.Content().try_as<xaml::UIElement>()
+                              : xaml::UIElement{nullptr};
+            }
+            if (!own)
+              return false;
+            owns_popup = true;
           }
-          if (!own)
-            return false;
-          owns_popup = true;
-        }
     return active || owns_popup ||
            (!GetCapture() && GetKeyState(VK_LBUTTON) >= 0 &&
             GetKeyState(VK_RBUTTON) >= 0 && GetKeyState(VK_MBUTTON) >= 0 &&
@@ -1363,26 +1368,18 @@ class WinUIShellView final : public ShellView {
     // a page click; stealing Win32 focus here cancels WinUI's pending Click.
     if (menu_.Contains(point))
       return true;
-    for (const auto& root : {root_, toolbar_root_, menu_root_})
-      if (root && root.XamlRoot()) {
-        const auto origin = root == toolbar_root_ ? layout_.toolbar
-                            : root == menu_root_  ? client_
-                                                  : layout_.sidebar;
-        for (const auto& popup :
-             media::VisualTreeHelper::GetOpenPopupsForXamlRoot(
-                 root.XamlRoot())) {
-          const auto child = popup.Child().try_as<xaml::FrameworkElement>();
-          if (!child)
-            continue;
-          const auto bounds = child.TransformToVisual(nullptr).TransformBounds(
-              {0, 0, static_cast<float>(child.ActualWidth()),
-               static_cast<float>(child.ActualHeight())});
-          if (Rect{bounds.X + origin.x, bounds.Y + origin.y, bounds.Width,
-                   bounds.Height}
-                  .Contains(point))
-            return true;
+    for (const auto& target : NativeInputTarget::Roots())
+      if (input_.Owns(target.window))
+        if (const auto root = target.XamlRoot()) {
+          for (const auto& popup :
+               media::VisualTreeHelper::GetOpenPopupsForXamlRoot(root)) {
+            const auto child = popup.Child().try_as<xaml::FrameworkElement>();
+            if (!child)
+              continue;
+            if (Bounds(child).Contains(point))
+              return true;
+          }
         }
-      }
     return (layout_.sidebar_visible && layout_.sidebar.Contains(point)) ||
            (layout_.toolbar_visible && layout_.toolbar.Contains(point));
   }
@@ -1544,6 +1541,7 @@ class WinUIShellView final : public ShellView {
       const bool keep_open = BrowserToolsOwnInput() || menu_.IsOpen() ||
                              command_bar_.IsOpen() || tabs_.IsPreviewOpen() ||
                              theme_editor_.IsOpen() || library_.OwnsInput() ||
+                             (boost_editor_ && boost_editor_->OwnsInput()) ||
                              HasOpenFlyouts();
       const bool sidebar_revealable =
           !layout_.sidebar.empty() &&
@@ -1703,13 +1701,30 @@ class WinUIShellView final : public ShellView {
   }
 
   Rect Bounds(const xaml::FrameworkElement& element) const {
-    const bool toolbar = element.XamlRoot() == toolbar_root_.XamlRoot();
-    const auto origin = toolbar ? layout_.toolbar : layout_.sidebar;
-    const auto rect =
-        element.TransformToVisual(toolbar ? toolbar_root_ : root_)
-            .TransformBounds({0, 0, static_cast<float>(element.ActualWidth()),
-                              static_cast<float>(element.ActualHeight())});
-    return {rect.X + origin.x, rect.Y + origin.y, rect.Width, rect.Height};
+    if (!element)
+      return {};
+    const auto root = element.XamlRoot();
+    if (!root)
+      return {};
+    for (const auto& target : NativeInputTarget::Roots()) {
+      if (!input_.Owns(target.window) || target.XamlRoot() != root)
+        continue;
+      POINT origin{};
+      if (!ClientToScreen(target.window, &origin) ||
+          !ScreenToClient(parent_, &origin))
+        return {};
+      // A transient island is not a child of the sidebar's visual tree.
+      // Map from its own XamlRoot through its native client origin, including
+      // the floating chrome wrapper and the root's rasterization scale.
+      const auto rect = element.TransformToVisual(nullptr).TransformBounds(
+          {0, 0, static_cast<float>(element.ActualWidth()),
+           static_cast<float>(element.ActualHeight())});
+      const auto ratio = static_cast<float>(root.RasterizationScale()) / scale_;
+      return {static_cast<float>(origin.x) / scale_ + rect.X * ratio,
+              static_cast<float>(origin.y) / scale_ + rect.Y * ratio,
+              rect.Width * ratio, rect.Height * ratio};
+    }
+    return {};
   }
 
   // A cursor over another app's window above this one is not over the element,

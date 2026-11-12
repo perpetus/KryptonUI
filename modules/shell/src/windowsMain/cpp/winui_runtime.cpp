@@ -113,9 +113,10 @@ void BootstrapRuntime() {
   const auto initialize = reinterpret_cast<Bootstrap>(
       GetProcAddress(runtime.bootstrap, "MddBootstrapInitialize2"));
   winrt::check_bool(initialize != nullptr);
+  PACKAGE_VERSION minimum{};
+  minimum.Version = KR_WINAPPSDK_RUNTIME_MIN_VERSION;
   winrt::check_hresult(initialize(KR_WINAPPSDK_RUNTIME_MAJOR_MINOR, nullptr,
-                                  PACKAGE_VERSION{},
-                                  MddBootstrapInitializeOptions_None));
+                                  minimum, MddBootstrapInitializeOptions_None));
   runtime.bootstrapped = true;
 }
 

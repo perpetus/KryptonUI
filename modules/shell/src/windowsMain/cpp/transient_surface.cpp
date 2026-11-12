@@ -38,7 +38,8 @@ void TransientSurface::Ensure() {
   source.Content(root);
   winrt::check_bool(input_target_
                         .Initialize(winrt::Microsoft::UI::GetWindowFromWindowId(
-                            source.SiteBridge().WindowId()))
+                                        source.SiteBridge().WindowId()),
+                                    root)
                         .has_value());
   root_ = root;
   source_ = source;

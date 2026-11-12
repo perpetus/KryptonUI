@@ -52,7 +52,6 @@ void SettingsWindow::Build() {
   winrt::check_hresult(
       window_.as<::IWindowNative>()->get_WindowHandle(&native));
   native_ = native;
-  winrt::check_bool(input_target_.Initialize(native).has_value());
   SetLastError(0);
   if (!SetWindowLongPtrW(native, GWLP_HWNDPARENT,
                          reinterpret_cast<LONG_PTR>(owner_)))
@@ -253,6 +252,7 @@ void SettingsWindow::Build() {
   title_bar_.VerticalAlignment(xaml::VerticalAlignment::Top);
   root_.Children().Append(title_bar_);
   window_.Content(root_);
+  winrt::check_bool(input_target_.Initialize(native, root_).has_value());
   window_.ExtendsContentIntoTitleBar(true);
   window_.SetTitleBar(title_bar_);
   pane_opened_ =

@@ -1,15 +1,35 @@
 #pragma once
 
 #include <windows.h>
+#include <winrt/Microsoft.UI.Xaml.h>
 
 #include <cstdint>
 #include <memory>
+#include <span>
 
 #include "krypton/ui/core/result.hpp"
 
 namespace kr::win {
 
 class IslandInputHost;
+
+// Each retained island has its own coordinate space and popup collection.
+// Cache the XamlRoot only after connection; registration ends before teardown.
+struct NativeInputRoot {
+  NativeInputRoot(HWND native,
+                  const winrt::Microsoft::UI::Xaml::FrameworkElement& content)
+      : window(native), element(content) {}
+  [[nodiscard]] winrt::Microsoft::UI::Xaml::XamlRoot XamlRoot() const {
+    if (!root_ && element)
+      root_ = element.XamlRoot();
+    return root_;
+  }
+  HWND window = nullptr;
+  winrt::Microsoft::UI::Xaml::FrameworkElement element{nullptr};
+
+ private:
+  mutable winrt::Microsoft::UI::Xaml::XamlRoot root_{nullptr};
+};
 
 // Registers native UI content, never the browser's host HWND. Descendants
 // and owned popups belong to the registration for its lifetime.
@@ -20,7 +40,9 @@ class NativeInputTarget {
   NativeInputTarget(const NativeInputTarget&) = delete;
   NativeInputTarget& operator=(const NativeInputTarget&) = delete;
 
-  [[nodiscard]] Result<void> Initialize(HWND window);
+  [[nodiscard]] Result<void> Initialize(
+      HWND window,
+      const winrt::Microsoft::UI::Xaml::FrameworkElement& root);
 
   // XAML subscribes to its parent's non-client pointer source. Give islands a
   // borderless child parent so browser caption input cannot seed their replay
@@ -31,6 +53,8 @@ class NativeInputTarget {
   [[nodiscard]] HWND Window() const noexcept { return window_; }
   [[nodiscard]] bool Owns(HWND window) const noexcept;
   [[nodiscard]] static bool Contains(HWND window) noexcept;
+  // Borrow only during a synchronous notification on the owning UI thread.
+  [[nodiscard]] static std::span<const NativeInputRoot> Roots() noexcept;
 
  private:
   std::shared_ptr<IslandInputHost> island_host_;

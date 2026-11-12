@@ -1,0 +1,19 @@
+name: Set up native Ninja
+description: Install the verified Ninja version without opening a build graph
+runs:
+  using: composite
+  steps:
+    - name: Download and verify Ninja 1.13.2
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $directory = Join-Path $env:RUNNER_TEMP 'krypton-ninja-1.13.2'
+        $archive = Join-Path $env:RUNNER_TEMP 'krypton-ninja-1.13.2.zip'
+        Invoke-WebRequest 'https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip' -OutFile $archive
+        if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne '07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65') {
+          throw 'Ninja archive SHA-256 mismatch.'
+        }
+        Expand-Archive -LiteralPath $archive -DestinationPath $directory -Force
+        $version = & (Join-Path $directory 'ninja.exe') --version
+        if ($LASTEXITCODE -ne 0 -or $version -ne '1.13.2') { throw 'Unexpected Ninja version.' }
+        $directory >> $env:GITHUB_PATH

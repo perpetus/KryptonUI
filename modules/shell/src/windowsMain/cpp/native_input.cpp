@@ -117,7 +117,7 @@ struct ThreadInput {
   HHOOK hook = nullptr;
   HHOOK focus_hook = nullptr;
   std::vector<NativeInput*> windows;
-  std::vector<HWND> targets;
+  std::vector<NativeInputRoot> targets;
   bool forwarding_key = false;
 };
 thread_local ThreadInput input;
@@ -142,13 +142,17 @@ void NativeInputTarget::Raise() const noexcept {
     island_host_->Raise();
 }
 
-Result<void> NativeInputTarget::Initialize(HWND window) {
+Result<void> NativeInputTarget::Initialize(
+    HWND window,
+    const winrt::Microsoft::UI::Xaml::FrameworkElement& root) {
   if (window_ || !IsWindow(window) ||
       GetWindowThreadProcessId(window, nullptr) != GetCurrentThreadId() ||
-      std::ranges::find(input.targets, window) != input.targets.end())
+      !root ||
+      std::ranges::find(input.targets, window, &NativeInputRoot::window) !=
+          input.targets.end())
     return Fail(ErrorCode::kInvalidArgument,
                 "Native input requires a unique window on the owning thread");
-  input.targets.push_back(window);
+  input.targets.emplace_back(window, root);
   window_ = window;
   return {};
 }
@@ -156,17 +160,23 @@ Result<void> NativeInputTarget::Initialize(HWND window) {
 void NativeInputTarget::Reset() noexcept {
   if (!window_)
     return;
-  std::erase(input.targets, window_);
+  std::erase_if(input.targets, [this](const auto& target) {
+    return target.window == window_;
+  });
   window_ = nullptr;
 }
 
 bool NativeInputTarget::Contains(HWND window) noexcept {
   for (HWND current = window; current;
        current = GetWindow(GetAncestor(current, GA_ROOT), GW_OWNER))
-    for (const auto target : input.targets)
-      if (current == target || IsChild(target, current))
+    for (const auto& target : input.targets)
+      if (current == target.window || IsChild(target.window, current))
         return true;
   return false;
+}
+
+std::span<const NativeInputRoot> NativeInputTarget::Roots() noexcept {
+  return input.targets;
 }
 
 bool NativeInputTarget::Owns(HWND window) const noexcept {
@@ -259,16 +269,9 @@ void NativeInput::Reset() noexcept {
 }
 
 bool NativeInput::Owns(HWND window) const noexcept {
-  if (!window || !parent_)
-    return false;
-  if (window == parent_ || IsChild(parent_, window))
-    return true;
-  // Walk intermediate owners too: a browser can itself be an owned window.
-  for (HWND root = GetAncestor(window, GA_ROOT); root;
-       root = GetWindow(root, GW_OWNER))
-    if (root == parent_ || IsChild(parent_, root))
-      return true;
-  return false;
+  // Use the same nearest browser as message routing. An owned second browser
+  // must not contribute its popup roots to the first browser's focus policy.
+  return window && parent_ && FindOwner(window) == this;
 }
 
 NativeInput* NativeInput::FindOwner(HWND window) noexcept {

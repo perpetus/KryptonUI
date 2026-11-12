@@ -367,6 +367,9 @@ void MenuPresenter::ShowMenu(std::uint32_t request_id,
     menu_.Hide();
   menu_rows_.clear();
   menu_ = MenuFlyout();
+  // Keep the old native input window from outliving a menu handoff. The
+  // separate windowed popup must finish closing before focus can return.
+  menu_.AreOpenCloseAnimationsEnabled(false);
   // Constrained Flyout popups can suppress native system backdrop rendering.
   menu_.ShouldConstrainToRootBounds(false);
   menu_.SystemBackdrop(material_.For(context_.brushes.menu_backdrop_enabled(),

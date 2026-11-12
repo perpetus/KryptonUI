@@ -68,7 +68,6 @@ void BrowserToolWindow::Build() {
   HWND native = nullptr;
   winrt::check_hresult(
       window_.as<::IWindowNative>()->get_WindowHandle(&native));
-  winrt::check_bool(input_target_.Initialize(native).has_value());
   SetLastError(0);
   if (!SetWindowLongPtrW(native, GWLP_HWNDPARENT,
                          reinterpret_cast<LONG_PTR>(owner_)))
@@ -260,6 +259,7 @@ void BrowserToolWindow::Build() {
   });
   closing_registered_ = true;
   window_.Content(root_);
+  winrt::check_bool(input_target_.Initialize(native, root_).has_value());
 }
 void BrowserToolWindow::Dismiss() {
   if (!visible_)

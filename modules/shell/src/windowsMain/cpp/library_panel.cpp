@@ -227,7 +227,8 @@ void LibraryPanel::Build() {
   source_.Content(root_);
   winrt::check_bool(input_target_
                         .Initialize(winrt::Microsoft::UI::GetWindowFromWindowId(
-                            source_.SiteBridge().WindowId()))
+                                        source_.SiteBridge().WindowId()),
+                                    root_)
                         .has_value());
 }
 

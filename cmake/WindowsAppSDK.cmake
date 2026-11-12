@@ -5,7 +5,7 @@
 # is one interface target, kr::WindowsAppSDK.
 #
 # The module is framework-dependent: at runtime it bootstraps the installed
-# Windows App Runtime 2.5 (see windowsMain/cpp/winui_runtime.cpp). So only
+# Windows App Runtime 2.6 (see windowsMain/cpp/winui_runtime.cpp). So only
 # headers and metadata are needed here; the bootstrap DLL is the one binary
 # we ship next to krypton_ui.dll.
 
@@ -15,16 +15,21 @@ set(KR_DEPS_DIR "${PROJECT_SOURCE_DIR}/.deps" CACHE PATH
     "Where NuGet packages and generated C++/WinRT headers are cached")
 
 # id | version | sha256 of the .nupkg. These are the component packages the
-# Microsoft.WindowsAppSDK 2.5.1 metapackage resolves to.
+# Microsoft.WindowsAppSDK 2.6.5 metapackage resolves to. Only the components
+# consumed by this native CMake build are downloaded; Base's MSBuild tasks
+# and the metapackage's unrelated feature components are not used here.
 set(KR_WINAPPSDK_PACKAGES
   "Microsoft.Windows.CppWinRT|2.0.250303.1|955e3051b35db1c00177ed14ab6b7b995c3b32a53fdb6c184ea53b1dba66e439"
-  "Microsoft.WindowsAppSDK.Foundation|2.3.12|ce04d01d68cb16b5dc85a5c9efb8162dba876bc2e5b766b5968979899d4efa9e"
-  "Microsoft.WindowsAppSDK.InteractiveExperiences|2.1.9|f9159d73e3e46717f159606e43b4acf8336aaff5bdd4d395fe3a93fdb41437ac"
-  "Microsoft.WindowsAppSDK.WinUI|2.3.9|d36145bd6c0f46fc04e07fb4af365d093fb42c39b625948d0ead07a0b26fce96"
+  "Microsoft.WindowsAppSDK.Foundation|2.6.5|548033e51be965804f7119e1936fe7f78f324d668becb731fcacb101f3bb18e4"
+  "Microsoft.WindowsAppSDK.InteractiveExperiences|2.6.5|3782df5d796dfe872175da0db2b64b616611532fd14b06d9e2102895286df136"
+  "Microsoft.WindowsAppSDK.WinUI|2.6.5|8cd902f8abaf4ac0f75bdd187fd420eb98419818f39ab5e853ed126bc26a6af9"
   "Microsoft.Web.WebView2|1.0.3719.77|2f6be3a10a1a8d6d1fde986af4131dab344f8181fffe75590824e0f4b037ed73")
 
 # The runtime the module bootstraps at startup; must match the packages above.
-set(KR_WINAPPSDK_RUNTIME_MAJOR_MINOR 0x00020005)
+set(KR_WINAPPSDK_RUNTIME_MAJOR_MINOR 0x00020006)
+# From the 2.6.5 Runtime package's WindowsAppSDK-VersionInfo.h. Require the
+# servicing version that supplies the fixes this module was built against.
+set(KR_WINAPPSDK_RUNTIME_MIN_VERSION 0x0002000600050000ULL)
 
 function(_kr_nuget_fetch id version sha256 out_dir_var)
   string(TOLOWER "${id}" lower_id)
@@ -112,7 +117,8 @@ target_include_directories(kr_windows_app_sdk SYSTEM INTERFACE
   "${_ie_pkg}/include"
   "${_winui_pkg}/include")
 target_compile_definitions(kr_windows_app_sdk INTERFACE
-  KR_WINAPPSDK_RUNTIME_MAJOR_MINOR=${KR_WINAPPSDK_RUNTIME_MAJOR_MINOR})
+    KR_WINAPPSDK_RUNTIME_MAJOR_MINOR=${KR_WINAPPSDK_RUNTIME_MAJOR_MINOR}
+    KR_WINAPPSDK_RUNTIME_MIN_VERSION=${KR_WINAPPSDK_RUNTIME_MIN_VERSION})
 # C++/WinRT activation goes through the umbrella import library.
 target_link_libraries(kr_windows_app_sdk INTERFACE windowsapp.lib)
 
