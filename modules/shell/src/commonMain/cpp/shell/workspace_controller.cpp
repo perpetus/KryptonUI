@@ -117,6 +117,49 @@ Result<void> Shell::OnWorkspaceSubmitted(WorkspaceEditKind kind,
   return {};
 }
 
+Result<void> Shell::OnWorkspaceProfileSubmitted(WorkspaceEditKind kind,
+                                                std::string_view name,
+                                                std::string_view glyph,
+                                                ProfileId profile,
+                                                std::string_view new_profile) {
+  const auto& state = store_.ui().workspace_editor;
+  if (kind != WorkspaceEditKind::kUpsert || !state.open || state.icon_tab ||
+      !browser_.CanSetSpaceProfiles())
+    return OnWorkspaceSubmitted(kind, name, glyph);
+  const auto choices = store_.profile_choices();
+  const auto choice = std::ranges::find(choices, profile, &ProfileChoice::id);
+  const auto* current =
+      state.value.id ? store_.FindSpaceProfile(state.value.id) : nullptr;
+  const bool create_profile = !new_profile.empty();
+  if (!create_profile && (!profile || choice == choices.end()))
+    return Fail(ErrorCode::kInvalidArgument, "Choose a profile");
+  const bool changed = create_profile || (current ? current->profile != profile
+                                                  : !choice->current);
+  if (!changed)
+    return OnWorkspaceSubmitted(kind, name, glyph);
+  if (new_profile.size() > 128 || new_profile.contains('\0'))
+    return Fail(ErrorCode::kInvalidArgument, "Profile name is invalid");
+  // Existing tabs keep their cookies and history; the host refuses too.
+  if (current && current->in_use)
+    return Fail(ErrorCode::kInvalidArgument, "Close the Space tabs first");
+  const auto value = PrepareWorkspaceEdit(
+      kind, state.value.id ? &state.value : nullptr, state.can_remove, name,
+      glyph, store_.theme().accent);
+  if (!value)
+    return std::unexpected(value.error());
+  const SpaceId id = state.value.id;
+  store_.CloseWorkspaceEditor();
+  ScheduleRender();
+  const ProfileId target = create_profile ? ProfileId{} : profile;
+  if (!id) {
+    browser_.CreateSpace(*value, target, new_profile);
+    return {};
+  }
+  browser_.EditWorkspace(kind, *value);
+  browser_.SetSpaceProfile(id, target, new_profile);
+  return {};
+}
+
 void Shell::OnWorkspaceEditorDismissed() {
   store_.CloseWorkspaceEditor();
   ScheduleRender();

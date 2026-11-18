@@ -66,10 +66,11 @@ class AppearanceSettings {
   const SettingsStyle& style_;
   std::array<controls::StackPanel, 4> sections_, groups_;
   controls::StackPanel root_;
-  controls::ComboBox scheme_, material_, icon_pack_, glass_, search_bar_,
-      new_tab_;
+  controls::ComboBox scheme_, material_, icon_pack_, search_bar_, new_tab_;
   std::array<controls::ComboBoxItem, 3> search_bar_choices_{nullptr, nullptr,
                                                             nullptr};
+  controls::ToggleSwitch switcher_awake_;
+  controls::ToggleSwitch::Toggled_revoker switcher_awake_changed_;
   std::array<controls::ComboBoxItem, 2> new_tab_choices_{nullptr, nullptr};
   controls::Primitives::Selector::SelectionChanged_revoker search_bar_changed_,
       new_tab_changed_;
@@ -86,11 +87,10 @@ class AppearanceSettings {
                                                    nullptr, nullptr};
   std::array<controls::ComboBoxItem, kIconPackCount> icon_packs_{
       nullptr, nullptr, nullptr, nullptr, nullptr};
-  std::array<controls::ComboBoxItem, 3> glass_modes_{nullptr, nullptr, nullptr};
   bool reconciling_ = false, reflowing_ = false, reflowing_rows_ = false,
        text_ready_ = false;
   controls::Primitives::Selector::SelectionChanged_revoker scheme_changed_,
-      material_changed_, icon_pack_changed_, glass_changed_;
+      material_changed_, icon_pack_changed_;
   controls::NumberBox::ValueChanged_revoker width_changed_;
   controls::ToggleSwitch::Toggled_revoker images_changed_, memory_changed_,
       search_bar_backdrop_changed_;

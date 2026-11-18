@@ -24,7 +24,8 @@ using Target = composition::ICompositionSupportsSystemBackdrop;
 // so island activation cannot put the material into its inactive fallback.
 // This never changes native or XAML keyboard focus.
 struct MenuBackdrop : media::SystemBackdropT<MenuBackdrop> {
-  explicit MenuBackdrop(MenuMaterialKind selected) : selected(selected) {}
+  explicit MenuBackdrop(MenuMaterialKind selected, bool frosted = false)
+      : selected(selected), frosted(frosted) {}
 
   struct Entry {
     Entry(const Target& target,
@@ -37,7 +38,7 @@ struct MenuBackdrop : media::SystemBackdropT<MenuBackdrop> {
     Entry(const Entry&) = delete;
     Entry& operator=(const Entry&) = delete;
 
-    void Connect(MenuMaterialKind selected) {
+    void Connect(MenuMaterialKind selected, bool frosted) {
       if (selected == MenuMaterialKind::kMica) {
         mica = backdrops::MicaController();
         mica.SetSystemBackdropConfiguration(configuration);
@@ -49,6 +50,11 @@ struct MenuBackdrop : media::SystemBackdropT<MenuBackdrop> {
                          : backdrops::DesktopAcrylicKind::Base);
         acrylic.SetSystemBackdropConfiguration(configuration);
         acrylic.AddSystemBackdropTarget(target);
+        if (frosted) {
+          acrylic.TintOpacity(design::kTokens.tab_switcher.tint_opacity);
+          acrylic.LuminosityOpacity(
+              design::kTokens.tab_switcher.luminosity_opacity);
+        }
       }
     }
 
@@ -101,7 +107,7 @@ struct MenuBackdrop : media::SystemBackdropT<MenuBackdrop> {
     SystemBackdropT::OnTargetConnected(target, root);
     auto entry = std::make_unique<Entry>(
         target, GetDefaultSystemBackdropConfiguration(target, root));
-    entry->Connect(selected);
+    entry->Connect(selected, frosted);
     entries.push_back(std::move(entry));
   }
 
@@ -124,6 +130,7 @@ struct MenuBackdrop : media::SystemBackdropT<MenuBackdrop> {
   }
 
   MenuMaterialKind selected;
+  bool frosted;
   std::vector<std::unique_ptr<Entry>> entries;
 };
 }  // namespace
@@ -131,6 +138,12 @@ struct MenuBackdrop : media::SystemBackdropT<MenuBackdrop> {
 winrt::Microsoft::UI::Xaml::Media::SystemBackdrop MakeMenuBackdrop(
     MenuMaterialKind selected) {
   return winrt::make<MenuBackdrop>(selected)
+      .as<winrt::Microsoft::UI::Xaml::Media::SystemBackdrop>();
+}
+winrt::Microsoft::UI::Xaml::Media::SystemBackdrop MakeTabSwitcherBackdrop() {
+  if (!backdrops::DesktopAcrylicController::IsSupported())
+    return nullptr;
+  return winrt::make<MenuBackdrop>(MenuMaterialKind::kAcrylic, true)
       .as<winrt::Microsoft::UI::Xaml::Media::SystemBackdrop>();
 }
 }  // namespace kr::win

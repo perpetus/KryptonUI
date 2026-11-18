@@ -242,6 +242,11 @@ Result<AppearancePrefs> EditAppearance(AppearancePrefs prefs,
         return Fail(ErrorCode::kInvalidArgument, "Invalid search bar backdrop");
       prefs.flags.Set(AppearanceFlag::kSearchBarMenuBackdrop, edit.value != 0);
       break;
+    case AppearanceOption::kSwitcherAwakeOnly:
+      if (edit.value > 1)
+        return Fail(ErrorCode::kInvalidArgument, "Invalid tab switcher mode");
+      prefs.flags.Set(AppearanceFlag::kSwitcherAwakeOnly, edit.value != 0);
+      break;
     case AppearanceOption::kNewTabBehavior:
       if (edit.value > std::to_underlying(NewTabBehavior::kNewTabPage))
         return Fail(ErrorCode::kInvalidArgument, "Invalid new tab behavior");
@@ -282,7 +287,7 @@ Result<AppearancePrefs> EditAppearance(AppearancePrefs prefs,
     case AppearanceOption::kGlassMode:
       if (edit.value > std::to_underlying(GlassMode::kQuality))
         return Fail(ErrorCode::kInvalidArgument, "Invalid glass mode");
-      prefs.glass_mode = static_cast<GlassMode>(edit.value);
+      prefs.glass_mode = GlassMode::kOff;
       break;
     case AppearanceOption::kIconPack:
       if (edit.value >= kIconPackCount)

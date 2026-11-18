@@ -7,6 +7,7 @@
 // ShellView::Render call it is passed to; views copy what they keep.
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -49,6 +50,12 @@ struct FolderVm {
   std::size_t order = 0;
   bool collapsed = false;
   bool can_add_child = true;
+  unsigned live_kind = 0;
+  std::string_view live_source;
+  unsigned live_interval_minutes = 30;
+  unsigned live_max_items = 20;
+  std::string_view live_status;
+  bool live_supported = false;
 };
 struct FolderRowVm {
   FolderId folder;
@@ -103,6 +110,7 @@ struct SuggestionVm {
   std::string_view description;
   ImageId icon;
   bool rich_image = false;
+  bool tab_switch = false;
   std::span<const SuggestionClassification> contents_class, description_class;
 };
 
@@ -117,6 +125,7 @@ struct CommandBarVm {
   std::uint32_t open_serial = 0;
   std::span<const SuggestionVm> suggestions;
   int selected = 0;
+  std::optional<ActionVm> microphone = std::nullopt;
 };
 
 struct TabPreviewVm {
@@ -132,6 +141,18 @@ struct TabPreviewVm {
   std::string_view memory_text;
   std::string_view status;
   bool memory_known = false;
+};
+
+struct TabSwitcherItemVm {
+  TabId tab;
+  std::string_view title;
+  ImageId favicon, thumbnail;
+  bool sleeping = false;
+};
+struct TabSwitcherVm {
+  bool open = false, awake_only = false;
+  std::array<TabSwitcherItemVm, kTabSwitcherPageSize> items;
+  std::size_t count = 0, selected = 0, total = 0, first = 0;
 };
 
 struct ThemeVm {
@@ -174,6 +195,7 @@ struct ShellViewModel {
   struct SettingsVm {
     std::span<const SettingsEntry> entries;
     const BrowserSettingsState* browser = nullptr;
+    const LocalModelsState* local_models = nullptr;
     const BrowserServicesState* services = nullptr;
     std::span<const Space> workspaces;
     SpaceId active_workspace;
@@ -229,6 +251,7 @@ struct ShellViewModel {
 
   CommandBarVm command_bar;
   TabPreviewVm tab_preview;
+  TabSwitcherVm tab_switcher;
 
   const ImageStore* images = nullptr;
   std::span<const ImageId> dropped_images;

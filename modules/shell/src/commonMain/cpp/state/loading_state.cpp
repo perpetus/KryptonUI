@@ -19,5 +19,7 @@ void Store::SetAddressFocused(bool focused) {
     return;
   ui_.address_focused = focused;
   MarkDirty(Dirty::kLoading);
+  if (ui_.command_bar.open)
+    MarkDirty(Dirty::kCommandBar);
 }
 }  // namespace kr

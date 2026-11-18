@@ -2,6 +2,7 @@
 
 #include <winrt/Microsoft.UI.Dispatching.h>
 #include <winrt/Microsoft.UI.Input.h>
+#include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Microsoft.UI.Xaml.Input.h>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -10,6 +11,7 @@
 #include <winrt/Windows.UI.ViewManagement.h>
 
 #include <algorithm>
+#include <utility>
 
 #include "krypton/ui/layout/popup_layout.hpp"
 #include "krypton/ui/layout/search_box_layout.hpp"
@@ -22,6 +24,16 @@ using namespace controls;
 using winrt::Windows::System::VirtualKey;
 using xaml::Thickness;
 using xaml::Visibility;
+
+namespace {
+bool WithinElement(xaml::DependencyObject element,
+                   const xaml::UIElement& root) {
+  for (; element; element = media::VisualTreeHelper::GetParent(element))
+    if (element == root)
+      return true;
+  return false;
+}
+}  // namespace
 
 CommandBar::~CommandBar() {
   lifetime_.reset();
@@ -41,6 +53,7 @@ CommandBar::~CommandBar() {
   text_scale_changed_.revoke();
   popup_closed_.revoke();
   fallback_key_.revoke();
+  microphone_key_.revoke();
   command_key_.revoke();
   Close();
 }
@@ -49,7 +62,9 @@ void CommandBar::Close() noexcept {
   edit_pending_ = false;
   composing_ = false;
   fade_.Stop();
-  requested_open_ = false;
+  shimmer_.Stop();
+  const bool was_open = std::exchange(requested_open_, false);
+  popup_open_requested_ = false;
   focus_pending_ = false;
   if (!command_popup_) {
     island_.Hide();
@@ -58,7 +73,8 @@ void CommandBar::Close() noexcept {
   const bool previous = std::exchange(rendering_, true);
   try {
     context_.glass.Place(surface_, {});
-    command_popup_.IsOpen(false);
+    if (command_popup_.IsOpen())
+      command_popup_.IsOpen(false);
     if (suggestions_)
       suggestions_->ClearImages();
   } catch (...) {
@@ -66,7 +82,99 @@ void CommandBar::Close() noexcept {
                               "Could not close the search box");
   }
   rendering_ = previous;
-  island_.Hide();
+  if (was_open)
+    HideIsland();
+  else
+    island_.Hide();
+}
+
+void CommandBar::Dismiss() {
+  if (!requested_open_)
+    return;
+  Close();
+  context_.delegate.OnCommandBarDismissed();
+}
+
+void CommandBar::NativeFocusChanged(HWND next, HWND previous) {
+  if (requested_open_ && island_.Owns(previous) && !island_.Owns(next))
+    QueueFocusLossCheck();
+}
+
+bool CommandBar::HasPopupFocus() const {
+  // XAML can retain the TextBox as its logical focus after Win32 transfers
+  // the keyboard to another window.
+  if (!island_.Owns(GetFocus()))
+    return false;
+  const auto root = surface_.XamlRoot();
+  if (!root)
+    return false;
+  const auto focused = xaml::Input::FocusManager::GetFocusedElement(root)
+                           .try_as<xaml::DependencyObject>();
+  if (WithinElement(focused, surface_))
+    return true;
+  // An editor context menu lives in a separate visual subtree of this root.
+  for (const auto& popup :
+       media::VisualTreeHelper::GetOpenPopupsForXamlRoot(root)) {
+    if (const auto child = popup.Child();
+        child && !child.try_as<ToolTip>() && WithinElement(focused, child))
+      return true;
+  }
+  return false;
+}
+
+void CommandBar::QueueFocusLossCheck() {
+  if (!requested_open_ || focus_pending_ || focus_loss_queued_)
+    return;
+  const auto serial = command_serial_;
+  const std::weak_ptr<int> weak = lifetime_;
+  focus_loss_queued_ = true;
+  // The native focus hook runs before the transfer and routed LostFocus can
+  // run before a sibling control receives GotFocus.
+  if (!owner_.DispatcherQueue().TryEnqueue(
+          winrt::Microsoft::UI::Dispatching::DispatcherQueuePriority::Low,
+          [this, weak, serial] {
+            if (weak.expired() || serial != command_serial_)
+              return;
+            focus_loss_queued_ = false;
+            if (!requested_open_ || focus_pending_)
+              return;
+            try {
+              if (!HasPopupFocus())
+                Dismiss();
+            } catch (...) {
+              platform::WriteDefaultLog(
+                  LogLevel::kWarning,
+                  "Could not dismiss the unfocused search box");
+            }
+          }))
+    focus_loss_queued_ = false;
+}
+
+bool CommandBar::Contains(Point point) const noexcept try {
+  if (!command_popup_ || !command_popup_.IsOpen())
+    return false;
+  if (context_.bounds(surface_).Contains(point))
+    return true;
+  // Text editing can open a separate popup outside the search box.
+  if (const auto root = surface_.XamlRoot())
+    for (const auto& popup :
+         media::VisualTreeHelper::GetOpenPopupsForXamlRoot(root)) {
+      const auto child = popup.Child().try_as<xaml::FrameworkElement>();
+      if (child && !child.try_as<ToolTip>() &&
+          context_.bounds(child).Contains(point))
+        return true;
+    }
+  return false;
+} catch (...) {
+  // A popup whose visuals are disconnecting can still dismiss natively.
+  return true;
+}
+
+void CommandBar::HideIsland() noexcept {
+  island_.Hide([this, weak = std::weak_ptr<int>(lifetime_)] {
+    if (!weak.expired())
+      context_.hover_changed();
+  });
 }
 
 void CommandBar::QueueEdit() {
@@ -104,10 +212,12 @@ void CommandBar::SetText(UiTextView text) {
   direction_ = text.right_to_left ? xaml::FlowDirection::RightToLeft
                                   : xaml::FlowDirection::LeftToRight;
   placeholder_ = NativeText(UiText::kAddress, text);
+  launcher_placeholder_ = NativeText(UiText::kCommandLauncher, text);
   if (command_input_) {
     surface_.FlowDirection(direction_);
-    command_input_.PlaceholderText(placeholder_);
-    Accessible(command_input_, placeholder_);
+    const auto& placeholder = floating_ ? launcher_placeholder_ : placeholder_;
+    command_input_.PlaceholderText(placeholder);
+    Accessible(command_input_, placeholder);
   }
 }
 
@@ -139,6 +249,7 @@ void CommandBar::EnsureCommandBar() {
   surface_.CornerRadius(UniformCorners(kTokens.radius.overlay));
   Grid content;
   AddRow(content, 0, xaml::GridUnitType::Auto);
+  AddRow(content, 0, xaml::GridUnitType::Auto);
   AddRow(content, 1, xaml::GridUnitType::Star);
   input_row_ = Grid();
   input_row_.MinHeight(kTokens.overlay.input_height);
@@ -147,6 +258,7 @@ void CommandBar::EnsureCommandBar() {
       {kTokens.overlay.input_margin, 0, kTokens.overlay.input_margin, 0});
   AddColumn(input_row_, 0, xaml::GridUnitType::Auto);
   AddColumn(input_row_, 1, xaml::GridUnitType::Star);
+  AddColumn(input_row_, 0, xaml::GridUnitType::Auto);
   const auto search = Glyph(glyphs::kSearch);
   search.Foreground(context_.brushes.search_text);
   search.Margin({0, 0, kTokens.overlay.icon_gap, 0});
@@ -184,6 +296,31 @@ void CommandBar::EnsureCommandBar() {
   Accessible(command_input_, placeholder_);
   Grid::SetColumn(command_input_, 1);
   input_row_.Children().Append(command_input_);
+  microphone_ = IconButton(
+      context_.brushes, winrt::to_hstring(kTokens.dictation.glyph), L"",
+      [this] {
+        if (!requested_open_ || !microphone_action_ || composing_)
+          return;
+        if (edit_pending_) {
+          edit_pending_ = false;
+          ReportEdit();
+        }
+        context_.delegate.OnActionInvoked(
+            microphone_action_, context_.bounds(microphone_->control));
+      });
+  microphone_->control.AllowFocusOnInteraction(false);
+  microphone_key_ = microphone_->control.PreviewKeyDown(
+      winrt::auto_revoke,
+      [this](auto&&, const xaml::Input::KeyRoutedEventArgs& args) {
+        if (args.Key() != VirtualKey::Escape || !requested_open_ || composing_)
+          return;
+        if (!context_.delegate.OnAddressKey(AddressKey::kEscape, {}))
+          context_.delegate.OnFocusPageRequested();
+        args.Handled(true);
+      });
+  microphone_->control.Visibility(Visibility::Collapsed);
+  Grid::SetColumn(microphone_->control, 2);
+  input_row_.Children().Append(microphone_->control);
   input_scroll_ = ScrollViewer();
   input_scroll_.MinHeight(0);
   input_scroll_.MinWidth(0);
@@ -191,6 +328,17 @@ void CommandBar::EnsureCommandBar() {
   input_scroll_.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
   input_scroll_.Content(input_row_);
   content.Children().Append(input_scroll_);
+  // A hairline divides the input from its results, shown only with results.
+  results_rule_ = Border();
+  results_rule_.Height(kTokens.spacing.separator_thickness);
+  results_rule_.Margin({kTokens.overlay.results_padding, 0,
+                        kTokens.overlay.results_padding,
+                        kTokens.overlay.separator_gap});
+  results_rule_.Background(context_.brushes.separator);
+  results_rule_.IsHitTestVisible(false);
+  results_rule_.Visibility(Visibility::Collapsed);
+  Grid::SetRow(results_rule_, 1);
+  content.Children().Append(results_rule_);
   suggestions_ = std::make_unique<SuggestionList>(context_);
   suggestions_->Root().Margin({kTokens.overlay.results_padding, 0,
                                kTokens.overlay.results_padding,
@@ -198,8 +346,16 @@ void CommandBar::EnsureCommandBar() {
   suggestions_->Root().MinWidth(0);
   suggestions_->Root().MinHeight(0);
   suggestions_->Root().MaxHeight(kTokens.overlay.results_max_height);
-  Grid::SetRow(suggestions_->Root(), 1);
+  Grid::SetRow(suggestions_->Root(), 2);
   content.Children().Append(suggestions_->Root());
+  // The opening light sweeps over the inner edge above the content. It never
+  // takes input or focus, and stays left-to-right so it always runs clockwise.
+  shimmer_host_ = Border();
+  shimmer_host_.IsHitTestVisible(false);
+  shimmer_host_.FlowDirection(xaml::FlowDirection::LeftToRight);
+  Grid::SetRowSpan(shimmer_host_, 3);
+  content.Children().Append(shimmer_host_);
+  shimmer_.Attach(shimmer_host_);
   surface_.Child(content);
   focused_ = surface_.GotFocus(winrt::auto_revoke, [this](auto&&, auto&&) {
     if (requested_open_)
@@ -207,18 +363,13 @@ void CommandBar::EnsureCommandBar() {
   });
   blurred_ = surface_.LostFocus(winrt::auto_revoke, [this](auto&&, auto&&) {
     const auto root = surface_.XamlRoot();
-    auto element = root ? xaml::Input::FocusManager::GetFocusedElement(root)
-                              .try_as<xaml::DependencyObject>()
-                        : xaml::DependencyObject{nullptr};
-    bool inside = false;
-    while (element) {
-      if (element == surface_) {
-        inside = true;
-        break;
-      }
-      element = media::VisualTreeHelper::GetParent(element);
-    }
-    context_.delegate.OnAddressFocusChanged(requested_open_ && inside);
+    const auto focused =
+        root ? xaml::Input::FocusManager::GetFocusedElement(root)
+                   .try_as<xaml::DependencyObject>()
+             : xaml::DependencyObject{nullptr};
+    context_.delegate.OnAddressFocusChanged(requested_open_ &&
+                                            WithinElement(focused, surface_));
+    QueueFocusLossCheck();
   });
   popup.Child(surface_);
   surface_size_ = surface_.SizeChanged(
@@ -280,7 +431,7 @@ void CommandBar::EnsureCommandBar() {
                       : Disposition::kCurrentTab);
         } else if (args.Key() == VirtualKey::Escape) {
           if (!context_.delegate.OnAddressKey(AddressKey::kEscape, modifiers))
-            context_.delegate.OnCommandBarDismissed();
+            context_.delegate.OnFocusPageRequested();
         } else if (args.Key() == VirtualKey::Down ||
                    args.Key() == VirtualKey::Up) {
           if (!address_key(args.Key() == VirtualKey::Down ? AddressKey::kDown
@@ -327,14 +478,8 @@ void CommandBar::EnsureCommandBar() {
           args.Handled(true);
       });
   popup_closed_ = popup.Closed(winrt::auto_revoke, [this](auto&&, auto&&) {
-    if (!rendering_ && requested_open_ && !command_popup_.IsOpen()) {
-      requested_open_ = false;
-      focus_pending_ = false;
-      fade_.Stop();
-      island_.Hide();
-      context_.delegate.OnCommandBarDismissed();
-      context_.hover_changed();
-    }
+    if (!command_popup_.IsOpen())
+      Dismiss();
   });
   const std::weak_ptr<int> weak = lifetime_;
   const auto queue = root.DispatcherQueue();
@@ -351,6 +496,9 @@ void CommandBar::EnsureCommandBar() {
           FocusInput();
           fade_.Play(surface_.Child(), context_.motion,
                      context_.brushes.high_contrast());
+          shimmer_.Play(
+              std::max(0.0f, surface_radius_ - kTokens.overlay.border_width),
+              context_.motion, context_.brushes.high_contrast());
         }
       });
   owner_loaded_ = root.Loaded(winrt::auto_revoke, [this, weak](auto&&, auto&&) {
@@ -382,8 +530,15 @@ void CommandBar::OpenWhenLoaded() noexcept {
       return;
     Reposition();
     island_.Raise();
-    if (!command_popup_.IsOpen())
-      command_popup_.IsOpen(true);
+    if (!popup_open_requested_) {
+      popup_open_requested_ = true;
+      try {
+        command_popup_.IsOpen(true);
+      } catch (...) {
+        popup_open_requested_ = false;
+        throw;
+      }
+    }
     FocusInput();
   } catch (...) {
     platform::WriteDefaultLog(LogLevel::kWarning,
@@ -434,6 +589,7 @@ void CommandBar::Reposition() noexcept {
     const bool attached = !floating_ && !address_anchor_.empty();
     const float radius =
         attached ? kTokens.radius.pill : kTokens.radius.overlay;
+    surface_radius_ = radius;
     const auto background = context_.glass.For(
         surface_, menu_backdrop_ ? GlassRole::kMenu : GlassRole::kSearch,
         menu_backdrop_ ? context_.brushes.menu_background
@@ -494,18 +650,21 @@ void CommandBar::Reposition() noexcept {
         std::max(0.0f, available - 2 * kTokens.overlay.border_width);
     if (input_scroll_.MaxHeight() != input_viewport)
       input_scroll_.MaxHeight(input_viewport);
-    const float results_viewport = ComputeSearchResultsMaxHeight(
-        client, static_cast<float>(input_row_.ActualHeight()));
+    const float measured_input =
+        static_cast<float>(input_row_.ActualHeight()) +
+        (results_rule_.Visibility() == Visibility::Visible
+             ? kTokens.spacing.separator_thickness +
+                   kTokens.overlay.separator_gap
+             : 0.0f);
+    const float results_viewport =
+        ComputeSearchResultsMaxHeight(client, measured_input);
     const float bounded_results =
-        attached
-            ? std::min(
-                  results_viewport,
-                  std::max(0.0f,
-                           available -
-                               static_cast<float>(input_row_.ActualHeight()) -
-                               2 * kTokens.overlay.border_width -
-                               kTokens.overlay.results_bottom_margin))
-            : results_viewport;
+        attached ? std::min(results_viewport,
+                            std::max(0.0f,
+                                     available - measured_input -
+                                         2 * kTokens.overlay.border_width -
+                                         kTokens.overlay.results_bottom_margin))
+                 : results_viewport;
     if (suggestions_->Root().MaxHeight() != bounded_results)
       suggestions_->Root().MaxHeight(bounded_results);
     if (command_popup_.HorizontalOffset() != bounds.x - client.x)
@@ -533,16 +692,44 @@ void CommandBar::RenderCommandBar(const CommandBarVm& vm,
     return;
   }
   EnsureCommandBar();
+  if (!requested_open_ || command_serial_ != vm.open_serial) {
+    command_serial_ = vm.open_serial;
+    edit_pending_ = false;
+    focus_pending_ = true;
+    focus_loss_queued_ = false;
+  }
+  requested_open_ = true;
   client_ = client;
   floating_ = vm.floating;
+  command_input_.PlaceholderText(floating_ ? launcher_placeholder_
+                                           : placeholder_);
   menu_backdrop_ = vm.menu_backdrop;
   // Popups have a separate theme root from their owner island.
   surface_.RequestedTheme(theme);
   command_input_.RequestedTheme(theme);
   command_input_.Foreground(context_.brushes.search_input);
   command_input_.PlaceholderForeground(context_.brushes.search_description);
-  const bool opening = !requested_open_;
-  requested_open_ = true;
+  const auto& microphone = vm.microphone;
+  microphone_action_ = microphone ? microphone->id : ActionId{};
+  const auto mic_visibility =
+      microphone ? Visibility::Visible : Visibility::Collapsed;
+  auto& mic = microphone_->control;
+  if (mic.Visibility() != mic_visibility)
+    mic.Visibility(mic_visibility);
+  if (microphone) {
+    SetButtonText(*microphone_, winrt::to_hstring(microphone->label));
+    if (microphone_->tooltip_text != microphone->tooltip) {
+      microphone_->tooltip_text = microphone->tooltip;
+      ToolTipService::SetToolTip(
+          mic, winrt::box_value(winrt::to_hstring(microphone->tooltip)));
+      xaml::Automation::AutomationProperties::SetHelpText(
+          mic, winrt::to_hstring(microphone->tooltip));
+    }
+    mic.IsEnabled(microphone->enabled);
+    mic.Background(microphone->active ? context_.brushes.active
+                                      : context_.brushes.transparent);
+    mic.Foreground(context_.brushes.search_text);
+  }
   if (!composing_ && command_input_.Text() != winrt::to_hstring(vm.text))
     command_input_.Text(winrt::to_hstring(vm.text));
   selection_pending_ = vm.selection;
@@ -556,10 +743,12 @@ void CommandBar::RenderCommandBar(const CommandBarVm& vm,
         static_cast<std::int32_t>(vm.selection.end - vm.selection.start));
   }
   suggestions_->Render(vm.suggestions, vm.selected, images);
-  if (opening || command_serial_ != vm.open_serial) {
-    command_serial_ = vm.open_serial;
-    focus_pending_ = true;
-  }
+  const auto rule =
+      vm.suggestions.empty() ? Visibility::Collapsed : Visibility::Visible;
+  if (results_rule_.Visibility() != rule)
+    results_rule_.Visibility(rule);
+  if (!requested_open_)
+    return;
   island_.Show(client, scale, theme);
   OpenWhenLoaded();
 }

@@ -71,6 +71,9 @@ class ShellViewDelegate {
   virtual void OnBrowserSettingEdited(BrowserSetting setting,
                                       std::uint32_t value) = 0;
   virtual void OnSettingsAction(SettingsAction action) = 0;
+  virtual void OnLocalModelCommand(LocalModelKind kind,
+                                   std::uint32_t id,
+                                   LocalModelCommand command) = 0;
   virtual void OnSettingsSearchEngine(SearchEngineId engine) = 0;
   [[nodiscard]] virtual Result<void> OnSettingsWorkspaceSubmitted(
       WorkspaceEditKind kind,
@@ -84,6 +87,18 @@ class ShellViewDelegate {
       std::string_view name,
       std::string_view glyph) = 0;
   virtual void OnWorkspaceEditorDismissed() = 0;
+  // The Space editor chose a profile. An empty `profile` with a non-empty
+  // `new_profile` asks the host to create a profile with that name.
+  [[nodiscard]] virtual Result<void> OnWorkspaceProfileSubmitted(
+      WorkspaceEditKind kind,
+      std::string_view name,
+      std::string_view glyph,
+      ProfileId profile,
+      std::string_view new_profile) {
+    (void)profile;
+    (void)new_profile;
+    return OnWorkspaceSubmitted(kind, name, glyph);
+  }
   virtual void OnSettingsSectionSelected(SettingsSection section) = 0;
   virtual void OnSettingsNavigationToggled() {}
   virtual void OnAppearanceEdited(AppearanceEdit edit) = 0;
@@ -91,6 +106,9 @@ class ShellViewDelegate {
   virtual void OnGlassBackdropRequested(const GlassBackdropRequest&) {}
   virtual void OnSettingsLayoutSelected(LayoutChoice choice) = 0;
   virtual void OnSettingsLayoutEdited(LayoutEdit edit) = 0;
+  virtual bool OnTabSwitcherMoved(int) { return false; }
+  virtual void OnTabSwitcherAccepted(std::size_t) {}
+  virtual void OnTabSwitcherDismissed() {}
   virtual void OnTabActivated(TabId tab) = 0;
   [[nodiscard]] virtual Result<void> OnFolderCommand(const FolderCommand&) {
     return Fail(ErrorCode::kUnsupported, "Folders are unavailable");
@@ -241,11 +259,17 @@ class ShellView {
     return false;
   }
   [[nodiscard]] virtual bool OwnsWindowFrame() const noexcept { return false; }
+  // A window shows one profile's shell at a time. A hidden shell keeps its
+  // state but no transient UI, native surfaces or input.
+  virtual void SetPresented(bool presented) { (void)presented; }
 };
 
 struct ShellViewParams {
   void* parent_window = nullptr;  // HWND on Windows, NSView* on macOS
   ThemeVm theme;
+  // Shares a window whose frame, caption and backdrop another shell owns.
+  // Starts hidden until presented.
+  bool hosted = false;
 };
 
 }  // namespace kr

@@ -82,6 +82,9 @@ static_assert(std::to_underlying(TabFlag::kCrashed) == KR_TAB_CRASHED);
 static_assert(std::to_underlying(TabFlag::kRecording) == KR_TAB_RECORDING);
 static_assert(std::to_underlying(TabFlag::kCapturing) == KR_TAB_CAPTURING);
 static_assert(std::to_underlying(TabFlag::kAttention) == KR_TAB_ATTENTION);
+static_assert(std::to_underlying(TabFlag::kSleeping) == KR_TAB_SLEEPING);
+static_assert(std::to_underlying(AppearanceFlag::kSwitcherAwakeOnly) ==
+              KR_APPEARANCE_SWITCHER_AWAKE_ONLY);
 static_assert(std::to_underlying(TabPreviewFlag::kLabelsProvided) ==
               KR_TAB_PREVIEW_LABELS_PROVIDED);
 static_assert(std::to_underlying(TabPreviewFlag::kNoImage) ==
@@ -92,6 +95,12 @@ static_assert(std::to_underlying(ActionKind::kToolbar) == KR_ACTION_TOOLBAR);
 static_assert(std::to_underlying(ActionKind::kSiteTools) ==
               KR_ACTION_SITE_TOOLS);
 static_assert(std::to_underlying(ActionKind::kCopyLink) == KR_ACTION_COPY_LINK);
+static_assert(std::to_underlying(ActionKind::kTranslate) ==
+              KR_ACTION_TRANSLATE);
+static_assert(std::to_underlying(ActionKind::kDictation) ==
+              KR_ACTION_DICTATION);
+static_assert(std::to_underlying(ActionKind::kZoomReset) ==
+              KR_ACTION_ZOOM_RESET);
 static_assert(std::to_underlying(ActionFlag::kAttention) ==
               KR_ACTION_ATTENTION);
 static_assert(std::to_underlying(WindowFlag::kTabFullscreen) ==
@@ -138,6 +147,10 @@ static_assert(std::to_underlying(MenuKind::kLibraryItem) ==
 static_assert(std::to_underlying(Element::kCompactMode) ==
               KR_ELEMENT_COMPACT_MODE);
 static_assert(std::to_underlying(AnchorKind::kTab) == KR_ANCHOR_TAB);
+static_assert(std::to_underlying(SidebarZone::kFrame) == KR_SIDEBAR_FRAME);
+static_assert(std::to_underlying(SidebarZone::kTabs) == KR_SIDEBAR_TABS);
+static_assert(std::to_underlying(SidebarZone::kEssentials) ==
+              KR_SIDEBAR_ESSENTIALS);
 static_assert(std::to_underlying(Element::kSidebar) == KR_ELEMENT_SIDEBAR);
 static_assert(std::to_underlying(Element::kToolbar) == KR_ELEMENT_TOOLBAR);
 static_assert(std::to_underlying(Element::kSidebarToggle) ==
@@ -184,6 +197,37 @@ std::vector<Space> ToSpaces(const abi::PayloadArray<KrSpace>& spaces) {
         .glyph = ToString(space.glyph),
         .color = Color{space.color},
     });
+  }
+  return result;
+}
+
+std::vector<ProfileChoice> ToProfileChoices(
+    const abi::PayloadArray<KrProfileChoice>& choices) {
+  std::vector<ProfileChoice> result;
+  result.reserve(choices.size());
+  for (std::size_t i = 0; i < choices.size(); ++i) {
+    const auto choice = choices[i];
+    result.push_back({.id = ProfileId{choice.id},
+                      .name = ToString(choice.name),
+                      .current = (choice.flags & KR_PROFILE_CURRENT) != 0});
+  }
+  return result;
+}
+
+std::vector<SpaceProfile> ToSpaceProfiles(
+    const abi::PayloadArray<KrSpaceProfile>& spaces) {
+  std::vector<SpaceProfile> result;
+  result.reserve(spaces.size());
+  for (std::size_t i = 0; i < spaces.size(); ++i) {
+    const auto space = spaces[i];
+    result.push_back({.space = SpaceId{space.space},
+                      .profile = ProfileId{space.profile},
+                      .status = space.state == KR_SPACE_PROFILE_MISSING
+                                    ? SpaceProfileStatus::kMissing
+                                : space.state == KR_SPACE_PROFILE_UNAVAILABLE
+                                    ? SpaceProfileStatus::kUnavailable
+                                    : SpaceProfileStatus::kReady,
+                      .in_use = (space.flags & KR_SPACE_PROFILE_IN_USE) != 0});
   }
   return result;
 }
@@ -270,6 +314,7 @@ Result<std::vector<Suggestion>> ToSuggestions(
         .icon = ImageId{s.icon},
         .selected = (s.flags & KR_SUGGESTION_SELECTED) != 0,
         .rich_image = (s.flags & KR_SUGGESTION_RICH_IMAGE) != 0,
+        .tab_switch = (s.flags & KR_SUGGESTION_TAB_SWITCH) != 0,
         .contents_class = std::move(*contents),
         .description_class = std::move(*description),
     });
@@ -450,6 +495,29 @@ void FillShellUi(Shell* shell, KrShellUI& output) {
       AsShell(self).SetSpaces(ToSpaces(*input), SpaceId{active});
     });
   };
+  ui.set_presented = [](void* self, bool presented) noexcept {
+    Guard("set_presented", [&] { AsShell(self).SetPresented(presented); });
+  };
+  ui.set_space_profiles = [](void* self, const KrProfileChoice* choices,
+                             std::size_t choice_count, std::size_t choice_size,
+                             const KrSpaceProfile* spaces,
+                             std::size_t space_count,
+                             std::size_t space_size) noexcept {
+    Guard("set_space_profiles", [&] {
+      const auto profiles = abi::PayloadArray<KrProfileChoice>::Read(
+          choices, choice_count, choice_size,
+          offsetof(KrProfileChoice, flags) + sizeof(KrProfileChoice::flags));
+      const auto mapping = abi::PayloadArray<KrSpaceProfile>::Read(
+          spaces, space_count, space_size,
+          offsetof(KrSpaceProfile, flags) + sizeof(KrSpaceProfile::flags));
+      if (!profiles || !mapping) {
+        Log(LogLevel::kWarning, "set_space_profiles ignored");
+        return;
+      }
+      AsShell(self).SetSpaceProfiles(ToProfileChoices(*profiles),
+                                     ToSpaceProfiles(*mapping));
+    });
+  };
   ui.tab_inserted = [](void* self, std::size_t index,
                        const KrTab* tab) noexcept {
     if (!tab || !KR_HAS_FIELD(tab, KrTab, favicon))
@@ -516,6 +584,9 @@ void FillShellUi(Shell* shell, KrShellUI& output) {
       }
       AsShell(self).ShowMenu(request_id, *menu);
     });
+  };
+  ui.open_launcher = [](void* self) noexcept {
+    Guard("open_launcher", [&] { AsShell(self).OnNewTab(); });
   };
   ui.focus_address = [](void* self, bool select_all) noexcept {
     Guard("focus_address", [&] { AsShell(self).FocusAddress(select_all); });
@@ -815,6 +886,21 @@ void FillShellUi(Shell* shell, KrShellUI& output) {
           [&] { accepted = AsShell(self).UrlDragChanged({x, y}, active); });
     return accepted;
   };
+  ui.set_dictation = [](void* self, const KrDictationUpdate* update) noexcept {
+    KrResult result = KR_ERR_INVALID_ARGUMENT;
+    Guard("set_dictation", [&] {
+      if (!update || !KR_HAS_FIELD(update, KrDictationUpdate, error) ||
+          update->text.size > 32768 || update->error.size > 1024 ||
+          (update->text.size && !update->text.data) ||
+          (update->error.size && !update->error.data))
+        return;
+      const auto applied = AsShell(self).SetDictation(
+          update->request_id, update->state, update->flags,
+          ToView(update->text), ToView(update->error));
+      result = applied ? KR_OK : KR_ERR_INVALID_ARGUMENT;
+    });
+    return result;
+  };
   std::memcpy(&output, &ui, ui.struct_size);
 }
 
@@ -880,8 +966,10 @@ KR_UI_API KrResult KR_UI_CALL kr_ui_create(const KrCreateParams* params,
                  .high_contrast = theme.high_contrast,
                  .accent = Color{theme.accent}};
     }
+    const bool hosted = KR_HAS_FIELD(params, KrCreateParams, flags) &&
+                        (params->flags & KR_CREATE_HOSTED_SHELL) != 0;
     auto shell =
-        Shell::Create(params->parent_window, *params->browser, initial);
+        Shell::Create(params->parent_window, *params->browser, initial, hosted);
     if (!shell) {
       // Failed creation destroys the temporary Shell and clears its log sink.
       // Report directly through the validated host table so startup failures

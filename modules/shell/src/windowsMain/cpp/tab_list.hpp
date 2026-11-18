@@ -13,12 +13,14 @@
 #include "folder_icon.hpp"
 #include "krypton/ui/layout/horizontal_layout.hpp"
 #include "krypton/ui/model/tab_drop.hpp"
+#include "krypton/ui/presentation/folder_menu.hpp"
 #include "tab_drag_visuals.hpp"
 #include "tab_hover_card.hpp"
 #include "view_context.hpp"
 #include "workspace_icon_picker.hpp"
 
 namespace kr::win {
+class LiveFolderEditor;
 struct TabRowData {
   std::string title;
   std::string url;
@@ -72,6 +74,9 @@ struct TabRow {
   FolderId folder;
   FolderId editing_folder;
   bool folder_collapsed = false;
+  unsigned folder_live_kind = 0;
+  bool folder_sign_in_required = false;
+  std::string folder_live_status;
   std::size_t depth = 0;
   controls::MenuFlyout folder_menu{nullptr};
   std::vector<controls::MenuFlyoutItem::Click_revoker> folder_clicks;
@@ -272,7 +277,7 @@ class TabList {
   std::unordered_map<TabId, TabRecord> records_;
   std::unordered_map<FolderId, FolderRecord> folder_records_;
   ThemeVm folder_theme_;
-  std::array<winrt::hstring, 10> folder_text_{};
+  std::array<winrt::hstring, kFolderTextKeys.size()> folder_text_{};
   std::vector<std::pair<SpaceId, winrt::hstring>> folder_workspaces_;
   std::array<controls::ItemsPanelTemplate, 2> panels_{nullptr, nullptr};
   bool records_prepared_ = false;
@@ -310,12 +315,14 @@ class TabList {
   winrt::hstring clear_help_text_ = NativeText(UiText::kClearTabsHelp);
   xaml::UIElement::PointerEntered_revoker list_entered_;
   xaml::UIElement::PointerExited_revoker list_exited_;
+  xaml::UIElement::RightTapped_revoker list_context_;
   xaml::FrameworkElement::SizeChanged_revoker sized_;
   controls::ListViewBase::ItemClick_revoker tab_click_;
   DragState drag_;
   std::vector<DragSlot> drag_slots_;
   bool drag_slots_dirty_ = true;
   std::unique_ptr<TabDragVisuals> drag_visuals_;
+  std::unique_ptr<LiveFolderEditor> live_folder_editor_;
   xaml::Input::PointerEventHandler drag_pressed_{nullptr}, drag_moved_{nullptr},
       drag_released_{nullptr}, drag_lost_{nullptr};
   controls::ListViewBase::ContainerContentChanging_revoker containers_;

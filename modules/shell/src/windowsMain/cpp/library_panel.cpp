@@ -618,23 +618,22 @@ void LibraryPanel::RenderSection(const ShellViewModel& vm) {
 void LibraryPanel::Slide(bool open) {
   const float hidden = on_right_ ? bounds_.width : -bounds_.width;
   const auto bridge = source_.SiteBridge();
-  const HWND window =
-      winrt::Microsoft::UI::GetWindowFromWindowId(bridge.WindowId());
   ++serial_;
   ResetBatch();
   if (open && !visible_) {
     const HWND focus = GetFocus();
-    return_focus_ =
-        focus != window && !IsChild(window, focus) ? focus : nullptr;
+    if (!input_target_.Owns(focus))
+      return_focus_ = focus;
     bridge.Show();
     visible_ = true;
   }
-  // The island stays up while it slides away; keys must leave it now.
   if (!open) {
     if (pulse_ && skeleton_)
       skeleton_.StopAnimation(pulse_);
     pulsing_ = false;
-    ReleaseFocus(window, std::exchange(return_focus_, nullptr), parent_);
+    // The slide can outlast a key press. Also check after the native hide,
+    // because WinUI can restore focus to this island while closing a flyout.
+    ReleaseFocus(input_target_.Window(), return_focus_, parent_);
   }
   if (open) {
     input_target_.Raise();
@@ -650,9 +649,8 @@ void LibraryPanel::Slide(bool open) {
     chrome_.Opacity(open ? 0.0f : 1.0f);
     chrome_opacity_ = open ? 0.0f : 1.0f;
     if (!open) {
-      HideSource();
       visible_ = false;
-      context_.hover_changed();
+      HideSource();
     }
     return;
   }
@@ -691,16 +689,23 @@ void LibraryPanel::Slide(bool open) {
     if (weak.expired() || serial != serial_ || open_)
       return;
     // Off-screen now; the native island need not stay up.
-    HideSource();
     visible_ = false;
-    context_.hover_changed();
+    HideSource();
   });
 }
 
 void LibraryPanel::HideSource() {
   const auto bridge = source_.SiteBridge();
-  hide_.Hide(winrt::Microsoft::UI::GetWindowFromWindowId(bridge.WindowId()),
-             root_.DispatcherQueue(), [bridge] { bridge.Hide(); });
+  const HWND window = input_target_.Window();
+  hide_.Hide(window, root_.DispatcherQueue(),
+             [this, weak = std::weak_ptr<int>(lifetime_), bridge, window] {
+               bridge.Hide();
+               if (weak.expired() || open_ || visible_)
+                 return;
+               ReleaseFocus(window, std::exchange(return_focus_, nullptr),
+                            parent_);
+               context_.hover_changed();
+             });
 }
 
 void LibraryPanel::ResetBatch() noexcept {
@@ -769,7 +774,6 @@ bool LibraryPanel::Contains(Point point) const noexcept {
 }
 
 void LibraryPanel::Close() noexcept try {
-  const bool was_visible = visible_;
   open_ = false;
   if (routing_form_)
     routing_form_->Close();
@@ -785,16 +789,8 @@ void LibraryPanel::Close() noexcept try {
   if (chrome_)
     chrome_.Opacity(1);
   chrome_opacity_ = 1;
-  if (source_ && visible_) {
-    ReleaseFocus(winrt::Microsoft::UI::GetWindowFromWindowId(
-                     source_.SiteBridge().WindowId()),
-                 return_focus_, parent_);
+  if (source_ && std::exchange(visible_, false))
     HideSource();
-  }
-  return_focus_ = nullptr;
-  visible_ = false;
-  if (was_visible)
-    context_.hover_changed();
 } catch (...) {
   platform::WriteDefaultLog(LogLevel::kWarning,
                             "Library island could not hide");

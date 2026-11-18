@@ -31,6 +31,7 @@ enum class TabFlag : std::uint32_t {
   kRecording = 1u << 6,
   kCapturing = 1u << 7,
   kAttention = 1u << 8,
+  kSleeping = 1u << 9,
 };
 template <>
 inline constexpr bool kIsFlagEnum<TabFlag> = true;
@@ -72,6 +73,20 @@ struct Space {
   Color color;
 };
 
+// A persistent browser profile a Space may use. Several Spaces may share one.
+struct ProfileChoice {
+  ProfileId id;
+  std::string name;
+  bool current = false;  // The profile that owns this window's Spaces.
+};
+enum class SpaceProfileStatus : std::uint8_t { kReady, kMissing, kUnavailable };
+struct SpaceProfile {
+  SpaceId space;
+  ProfileId profile;
+  SpaceProfileStatus status = SpaceProfileStatus::kReady;
+  bool in_use = false;  // Tabs or folders remain; the profile cannot change.
+};
+
 // ------------------------------------------------------------ navigation --
 
 enum class SecurityLevel : std::uint32_t {
@@ -101,6 +116,9 @@ enum class ActionKind : std::uint32_t {
   kToolbar = 4,
   kSiteTools = 5,
   kCopyLink = 6,
+  kTranslate = 7,
+  kDictation = 8,
+  kZoomReset = 9,
 };
 
 enum class ActionFlag : std::uint32_t {
@@ -244,6 +262,7 @@ struct Suggestion {
   ImageId icon;
   bool selected = false;
   bool rich_image = false;
+  bool tab_switch = false;
   std::vector<SuggestionClassification> contents_class, description_class;
 };
 
@@ -350,6 +369,9 @@ enum class MenuKind : std::uint32_t {
   kDownload = 17,     // target: DownloadId
   kLibraryItem = 18,  // target: LibraryItemId
 };
+
+// Target of MenuKind::kSidebar; tab and folder rows keep their own menus.
+enum class SidebarZone : std::uint64_t { kFrame, kTabs, kEssentials };
 
 // The sidebar's two toggle buttons. The one in the sidebar's top row steps
 // through every presentation; the footer one only expands and collapses.

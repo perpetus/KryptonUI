@@ -77,6 +77,7 @@ enum class ChromeCommand : std::int32_t {
   kExtensionBlocker,
   kPinTop,
   kPinSide,
+  kToggleEssential,
   kSwitchWorkspaceBase = 2000
 };
 }  // namespace kr::fixtures

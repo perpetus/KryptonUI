@@ -31,7 +31,8 @@ class Shell final : public ShellViewDelegate {
   [[nodiscard]] static Result<std::unique_ptr<Shell>> Create(
       void* parent_window,
       const KrBrowser& browser,
-      const Theme& initial_theme = {});
+      const Theme& initial_theme = {},
+      bool hosted = false);
   // Use Create(); the key keeps construction private while still allowing
   // std::make_unique.
   Shell(PassKey, const KrBrowser& browser);
@@ -154,6 +155,10 @@ class Shell final : public ShellViewDelegate {
   void OnBrowserSettingEdited(BrowserSetting setting,
                               std::uint32_t value) override;
   void OnSettingsAction(SettingsAction action) override;
+  [[nodiscard]] Result<void> SetLocalModels(LocalModelsState value);
+  void OnLocalModelCommand(LocalModelKind kind,
+                           std::uint32_t id,
+                           LocalModelCommand command) override;
   void OnSettingsSearchEngine(SearchEngineId engine) override;
   [[nodiscard]] Result<void> OnSettingsWorkspaceSubmitted(
       WorkspaceEditKind kind,
@@ -190,6 +195,9 @@ class Shell final : public ShellViewDelegate {
                 const std::uint8_t* pixels);
   void DropImage(ImageId id);
   void SetSpaces(std::vector<Space> spaces, SpaceId active);
+  void SetSpaceProfiles(std::vector<ProfileChoice> choices,
+                        std::vector<SpaceProfile> spaces);
+  void SetPresented(bool presented);
   void InsertTab(std::size_t index, Tab tab);
   [[nodiscard]] Result<void> UpsertFolder(Folder folder);
   [[nodiscard]] Result<void> RemoveFolder(FolderId id);
@@ -209,6 +217,14 @@ class Shell final : public ShellViewDelegate {
   void ShowMenu(std::uint32_t request_id, const MenuTree& menu);
   void FocusAddress(bool select_all);
   void SetAddressText(std::string text, bool select_all);
+  void ToggleDictation();
+  void BeginDictation();
+  void StopDictation();
+  [[nodiscard]] Result<void> SetDictation(std::uint32_t request,
+                                          std::uint32_t state,
+                                          std::uint32_t flags,
+                                          std::string_view text,
+                                          std::string_view error);
   [[nodiscard]] Result<void> SetAddressEdit(std::uint32_t request,
                                             std::uint64_t revision,
                                             std::string text,
@@ -233,12 +249,21 @@ class Shell final : public ShellViewDelegate {
       std::string_view name,
       std::string_view glyph) override;
   void OnWorkspaceEditorDismissed() override;
+  [[nodiscard]] Result<void> OnWorkspaceProfileSubmitted(
+      WorkspaceEditKind kind,
+      std::string_view name,
+      std::string_view glyph,
+      ProfileId profile,
+      std::string_view new_profile) override;
   [[nodiscard]] bool PreTranslateMessage(const void* native_message);
 
   [[nodiscard]] const Store& store() const { return store_; }
   [[nodiscard]] std::uint64_t render_count() const { return stats_.count(); }
 
   // ShellViewDelegate:
+  bool OnTabSwitcherMoved(int delta) override;
+  void OnTabSwitcherAccepted(std::size_t index) override;
+  void OnTabSwitcherDismissed() override;
   void OnTabActivated(TabId tab) override;
   void OnTabClosed(TabId tab) override;
   void OnClearTabs() override;
@@ -361,8 +386,15 @@ class Shell final : public ShellViewDelegate {
   };
   std::unordered_map<std::uint32_t, MenuAnchor> menu_anchors_;
   std::uint32_t next_menu_request_ = 1;
+  std::uint32_t dictation_request_ = 0, next_dictation_request_ = 0;
+  std::uint32_t dictation_edit_request_ = 0;
+  std::uint64_t dictation_edit_revision_ = 0;
+  bool dictation_pending_focus_ = false;
+  std::string dictation_prefix_, dictation_suffix_;
   bool command_opens_new_tab_ = false;
   bool render_scheduled_ = false;
+  void RequestTabSwitcherPage();
+  std::vector<TabId> recent_tabs_;
   std::uint32_t next_tab_preview_request_ = 0;
   std::uint64_t sidebar_hover_serial_ = 0;
   std::uint64_t toolbar_hover_serial_ = 0;

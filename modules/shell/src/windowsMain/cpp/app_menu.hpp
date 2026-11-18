@@ -21,7 +21,8 @@ class AppMenuPresenter {
             float scale,
             xaml::ElementTheme theme,
             xaml::FlowDirection direction,
-            bool site_info = false);
+            bool site_info = false,
+            bool translation = false);
   void Update(Rect viewport,
               float scale,
               xaml::ElementTheme theme,
@@ -29,6 +30,9 @@ class AppMenuPresenter {
   void Reanchor(Rect anchor);
   void Raise() noexcept { island_.Raise(); }
   [[nodiscard]] bool IsOpen() const noexcept { return open_; }
+  [[nodiscard]] bool OwnsInput() const noexcept {
+    return open_ || closing_ || island_.IsClosing();
+  }
   [[nodiscard]] bool Contains(Point point) const noexcept {
     return open_ && frame_.Contains(point);
   }
@@ -52,7 +56,10 @@ class AppMenuPresenter {
   void Separator();
   void FocusFirst();
   [[nodiscard]] bool RefreshInPlace(const MenuTree& tree);
-  [[nodiscard]] bool RefreshSiteInfo(const MenuTree& tree);
+  [[nodiscard]] bool RefreshLiveRows(const MenuTree& tree);
+  [[nodiscard]] bool LiveRows() const noexcept {
+    return site_info_ || translation_;
+  }
   void Key(const xaml::Input::KeyRoutedEventArgs& args);
   void EnsureOwner();
   void Reposition() noexcept;
@@ -74,7 +81,9 @@ class AppMenuPresenter {
   };
   std::unordered_map<std::int32_t, LiveRow> live_rows_;
   controls::TextBlock active_title_{nullptr};
+  controls::Button back_button_{nullptr};
   bool site_info_ = false;
+  bool translation_ = false;
   std::unique_ptr<NativeButton> site_close_;
   std::vector<std::unique_ptr<NativeButton>> buttons_;
   std::vector<controls::Button> focus_targets_;
@@ -86,6 +95,7 @@ class AppMenuPresenter {
   std::uint32_t request_ = 0;
   std::uint64_t generation_ = 0;
   bool open_ = false;
+  bool closing_ = false;
   bool tiled_ = false;
   bool opened_ = false, attached_ = false, positioning_ = false;
   Rect anchor_;

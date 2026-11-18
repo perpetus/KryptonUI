@@ -21,6 +21,7 @@ using TabId = Id<struct TabTag>;
 using FolderId = Id<struct FolderTag>;
 using SplitGroupId = Id<struct SplitGroupTag>;
 using SpaceId = Id<struct SpaceTag>;
+using ProfileId = Id<struct ProfileTag>;
 using ActionId = Id<struct ActionTag>;
 using ImageId = Id<struct ImageTag>;
 

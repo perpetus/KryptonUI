@@ -21,13 +21,16 @@ class FolderIcon {
               const ThemeVm& theme,
               Brushes& brushes,
               const NativeMotion& motion,
-              bool animate);
+              bool animate,
+              unsigned live_kind = 0);
   void Reset() noexcept;
   [[nodiscard]] const controls::Viewbox& Root() const noexcept { return root_; }
 
  private:
-  controls::Viewbox root_{nullptr};
+  controls::Viewbox root_{nullptr}, provider_icon_{nullptr};
+  unsigned provider_kind_ = 0;
   controls::Canvas canvas_{nullptr}, back_{nullptr}, front_{nullptr};
+  controls::Grid emblem_host_{nullptr};
   controls::TextBlock emblem_{nullptr};
   xaml::UIElement dots_{nullptr};
   winrt::Microsoft::UI::Composition::Visual back_visual_{nullptr},

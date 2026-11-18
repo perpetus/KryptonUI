@@ -248,7 +248,10 @@ class MockBrowser {
     std::string glyph;
     std::uint32_t color = 0;
     KrTabId last_active = 0;
+    // Fixture profile labels only; the preview has no real profile storage.
+    KrProfileId profile = 1;  // kCurrentProfile
   };
+  static constexpr KrProfileId kCurrentProfile = 1;
 
   // Seeding and pushes into the UI.
   void Seed();
@@ -314,6 +317,11 @@ class MockBrowser {
     std::string name, glyph;
     std::size_t order = 0;
     bool collapsed = false;
+    uint32_t live_kind = 0;
+    std::string live_source;
+    uint32_t live_interval_minutes = 30;
+    uint32_t live_max_items = 20;
+    std::string live_status;
   };
   std::vector<MockFolder> folders_;
   KrFolderId next_folder_id_ = 1;
@@ -323,6 +331,15 @@ class MockBrowser {
   void LoadInto(MockTab& tab, std::string_view text);
   void SwitchSpace(KrSpaceId id);
   void EditWorkspace(std::uint32_t kind, const KrSpace& space);
+  [[nodiscard]] KrResult SetSpaceProfile(KrSpaceId space,
+                                         KrProfileId profile,
+                                         std::string_view new_profile);
+  [[nodiscard]] KrResult CreateSpace(const KrSpace& space,
+                                     KrProfileId profile,
+                                     std::string_view new_profile);
+  [[nodiscard]] KrProfileId ResolveProfile(KrProfileId profile,
+                                           std::string_view new_profile);
+  void PushSpaceProfiles() const;
   void Suggest(std::uint32_t request_id, std::string_view text);
   void AcceptSuggestion(std::size_t index, std::uint32_t disposition);
   void ShowMenu(std::uint32_t request_id,
@@ -363,6 +380,7 @@ class MockBrowser {
   // First-run onboarding (onboarding_host).
   void InitSettings();
   void PushSettings();
+  void PushLocalModels();
   void PushBrowserServices() const;
   void CompleteSettings(std::uint64_t request, KrResult result) const;
   bool settings_visible_ = false;
@@ -372,6 +390,9 @@ class MockBrowser {
   std::uint64_t settings_controls_ = (UINT64_C(1) << 7) - 1;
   std::uint64_t settings_actions_ = (UINT64_C(1) << 23) - 1;
   bool settings_ask_download_ = false;
+  bool translation_installed_ = false, voice_installed_ = true;
+  bool translation_notice_ = false, voice_notice_ = false;
+  bool voice_selected_ = false;
   std::string settings_download_ = "C:\\Users\\Preview\\Downloads";
   std::optional<std::uint32_t> last_settings_action_;
   void InitOnboarding();
@@ -414,6 +435,10 @@ class MockBrowser {
   std::vector<MockTab> tabs_;
   KrSpaceId active_space_ = 0;
   KrSpaceId next_workspace_id_ = 4;
+  std::vector<std::pair<KrProfileId, std::string>> profiles_{
+      {kCurrentProfile, "Personal"},
+      {2, "Work"}};
+  KrProfileId next_profile_id_ = 3;
   std::vector<KrWorkspaceTheme> extra_workspace_themes_;
   KrTabId active_tab_ = 0;
   KrTabId next_tab_id_ = 1;

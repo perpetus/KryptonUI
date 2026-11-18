@@ -188,7 +188,7 @@ class OnboardingView {
   Rect client_, card_rect_;
   ShellLayout layout_;
   float scale_ = 1;
-  bool built_ = false, placed_ = false, finishing_ = false, text_ready_ = false;
+  bool placed_ = false, finishing_ = false, text_ready_ = false;
   bool right_to_left_ = false;
   bool primary_requests_default_ = false, primary_finishes_ = false,
        secondary_declines_ = false;

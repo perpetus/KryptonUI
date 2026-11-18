@@ -33,7 +33,9 @@ class LibraryPanel {
   void Raise() noexcept;
   [[nodiscard]] bool IsOpen() const noexcept { return open_; }
   [[nodiscard]] bool Contains(Point point) const noexcept;
-  [[nodiscard]] bool OwnsInput() const noexcept { return open_ || visible_; }
+  [[nodiscard]] bool OwnsInput() const noexcept {
+    return open_ || visible_ || hide_.IsPending();
+  }
 
  private:
   struct Tab {
@@ -92,7 +94,7 @@ class LibraryPanel {
   ContentFade fade_;
   Rect bounds_;
   float scale_ = 1;
-  bool open_ = false, visible_ = false, on_right_ = false, labels_ = true;
+  bool open_ = false, visible_ = false, on_right_ = false;
   bool pulsing_ = false;
   std::optional<LibrarySection> shown_section_;
   std::uint64_t serial_ = 0;

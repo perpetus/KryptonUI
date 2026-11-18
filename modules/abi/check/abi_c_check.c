@@ -17,6 +17,7 @@ _Static_assert(KR_DOWNLOAD_STARTED == 1u << 4,
                "download-start remains append-only");
 _Static_assert(KR_SUGGESTION_SELECTED == 1u << 2,
                "selection flag remains append-only");
+_Static_assert(KR_ACTION_TRANSLATE == 7, "translation action is append-only");
 _Static_assert(KR_ACTION_COPY_LINK == 6,
                "copy-link action remains append-only");
 
@@ -260,3 +261,48 @@ _Static_assert(KR_MULTI_PAGE_COMPLETE == 31 &&
                    KR_MULTI_PAGE_SNAP_LAYOUTS == 32 && KR_SPLIT_GRID == 2 &&
                    KR_SPLIT_MAIN_BOTTOM == 9,
                "snap support keeps legacy capabilities and layouts stable");
+_Static_assert(offsetof(KrBrowser, create_space) >
+                       offsetof(KrBrowser, set_space_profile) &&
+                   offsetof(KrBrowser, set_space_profile) >
+                       offsetof(KrBrowser, cancel_tab_switcher_previews),
+               "Space profile commands append to the browser table");
+_Static_assert(offsetof(KrShellUI, set_space_profiles) >
+                       offsetof(KrShellUI, set_presented) &&
+                   offsetof(KrShellUI, set_presented) >
+                       offsetof(KrShellUI, url_drag_changed),
+               "hosted presentation appends to the UI table");
+_Static_assert(offsetof(KrCreateParams, flags) >
+                   offsetof(KrCreateParams, initial_theme),
+               "creation flags are an optional tail");
+_Static_assert(offsetof(KrProfileChoice, struct_size) == 0 &&
+                   offsetof(KrSpaceProfile, struct_size) == 0,
+               "sized profile payloads");
+
+_Static_assert(offsetof(KrShellUI, open_launcher) >
+                   offsetof(KrShellUI, set_space_profiles),
+               "launcher is an optional ABI-v2 tail");
+
+_Static_assert(KR_SETTINGS_ACTION_LOCAL_MODELS ==
+                   KR_SETTINGS_ACTION_BROWSER_SETTINGS + 1,
+               "settings append");
+_Static_assert(KR_ACTION_DICTATION == 8, "dictation action append");
+_Static_assert(KR_ACTION_ZOOM_RESET == 9, "zoom reset action append");
+_Static_assert(offsetof(KrBrowser, stop_dictation) >
+                   offsetof(KrBrowser, start_dictation),
+               "dictation browser tail");
+_Static_assert(offsetof(KrBrowser, manage_local_model) >
+                   offsetof(KrBrowser, stop_dictation),
+               "local model browser tail");
+_Static_assert(offsetof(KrShellUI, set_local_models) >
+                   offsetof(KrShellUI, set_dictation),
+               "local model UI tail");
+_Static_assert(offsetof(KrLocalModelsSnapshot, struct_size) == 0,
+               "Local model settings snapshot must remain sized");
+_Static_assert(offsetof(KrShellUI, set_local_models_v2) >
+                   offsetof(KrShellUI, set_local_models),
+               "Structured voice models must append an optional slot");
+_Static_assert(offsetof(KrLocalModelsSnapshotV2, struct_size) == 0,
+               "sized local model snapshot");
+_Static_assert(offsetof(KrShellUI, set_dictation) >
+                   offsetof(KrShellUI, open_launcher),
+               "dictation UI tail");

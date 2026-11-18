@@ -2,7 +2,9 @@
 
 #include <functional>
 #include <memory>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "transient_surface.hpp"
 #include "view_context.hpp"
@@ -30,6 +32,9 @@ class WorkspaceEditor {
 
  private:
   void Build();
+  void RenderProfiles(const WorkspaceEditorVm& vm, UiTextView text);
+  void Submit(const controls::ContentDialogButtonClickEventArgs& args);
+  [[nodiscard]] bool CreatingProfile() const;
   void TryOpen();
   void FinishClose();
   void Close() noexcept;
@@ -40,6 +45,14 @@ class WorkspaceEditor {
   controls::TextBox name_{nullptr};
   std::unique_ptr<WorkspaceIconPicker> glyph_;
   controls::TextBlock error_{nullptr};
+  // Profile choice: existing persistent profiles, then "New profile".
+  controls::ComboBox profile_{nullptr};
+  controls::TextBox new_profile_{nullptr};
+  controls::TextBlock profile_note_{nullptr};
+  std::vector<ProfileId> profile_ids_;
+  std::vector<std::string> profile_names_;
+  std::uint32_t profile_serial_ = 0;
+  bool profiles_shown_ = false;
   winrt::Windows::Foundation::IAsyncOperation<controls::ContentDialogResult>
       operation_{nullptr};
   std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
@@ -51,5 +64,6 @@ class WorkspaceEditor {
   controls::ContentDialog::PrimaryButtonClick_revoker save_;
   controls::ContentDialog::SecondaryButtonClick_revoker remove_;
   xaml::UIElement::ProcessKeyboardAccelerators_revoker fallback_;
+  controls::ComboBox::SelectionChanged_revoker profile_changed_;
 };
 }  // namespace kr::win

@@ -32,6 +32,7 @@ class SuggestionList {
     IInspectable item{nullptr};
     bool selected = false;
     bool rich_image = false;
+    bool tab_switch = false;
     std::vector<SuggestionClassification> contents_class, description_class;
     std::uint64_t text_revision = 0;
   };

@@ -8,8 +8,10 @@ Result<void> Store::SetAppearancePrefs(const AppearancePrefs& prefs,
       prefs.icon_pack > IconPack::kRadix ||
       prefs.glass_mode > GlassMode::kQuality)
     return Fail(ErrorCode::kInvalidArgument, "Invalid appearance preferences");
-  if (appearance_ != prefs) {
-    appearance_ = prefs;
+  auto effective = prefs;
+  effective.glass_mode = GlassMode::kOff;
+  if (appearance_ != effective) {
+    appearance_ = effective;
     MarkDirty(Dirty::kSettings | Dirty::kTheme | Dirty::kTabPreview);
   }
   if (ui_.settings.icon_pack_editable != icon_pack_editable) {

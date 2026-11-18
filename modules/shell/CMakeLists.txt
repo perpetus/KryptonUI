@@ -34,6 +34,8 @@ add_custom_command(
     "${PROJECT_SOURCE_DIR}/design/icons/site-tools.svg"
           "${PROJECT_SOURCE_DIR}/design/icons/dart-down.svg"
           "${PROJECT_SOURCE_DIR}/design/icons/globe.svg"
+          "${PROJECT_SOURCE_DIR}/design/icons/logo-github.svg"
+          "${PROJECT_SOURCE_DIR}/design/icons/logo-rss.svg"
           "${PROJECT_SOURCE_DIR}/design/icons/back.svg"
           "${PROJECT_SOURCE_DIR}/design/icons/forward.svg"
           "${PROJECT_SOURCE_DIR}/design/icons/close.svg"
@@ -126,6 +128,10 @@ kr_module(shell
   KIND SHARED
   OUTPUT_NAME krypton_ui
   DEPENDS kr_abi)
+if(KR_RELEASE_MAX)
+  kr_release_max_options(kr_shell_common)
+  kr_release_max_options(kr_shell)
+endif()
 
 target_include_directories(kr_shell_common PUBLIC "${KR_GENERATED_INCLUDE}")
 add_dependencies(kr_shell_common kr_design_tokens)

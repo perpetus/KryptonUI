@@ -1,4 +1,7 @@
+#include <iterator>
+
 #include "krypton/fixtures/mock_browser.hpp"
+
 namespace kr::fixtures {
 namespace {
 KrStr Borrow(std::string_view value) {
@@ -19,8 +22,39 @@ void MockBrowser::InitSettings() {
       if (visible) {
         mock.PushSettings();
         mock.PushBrowserServices();
+        mock.PushLocalModels();
       }
     } catch (...) {
+    }
+  };
+  table_.manage_local_model = [](void* self, std::uint32_t kind,
+                                 std::uint32_t id,
+                                 std::uint32_t command) noexcept -> KrResult {
+    try {
+      auto& mock = Self(self);
+      if (!mock.settings_visible_ ||
+          mock.settings_section_ != KR_SETTINGS_LANGUAGES ||
+          kind > KR_LOCAL_MODEL_VOICE || id || command > KR_LOCAL_MODEL_SELECT)
+        return KR_ERR_INVALID_ARGUMENT;
+      const bool voice = kind == KR_LOCAL_MODEL_VOICE;
+      auto& installed =
+          voice ? mock.voice_installed_ : mock.translation_installed_;
+      auto& notice = voice ? mock.voice_notice_ : mock.translation_notice_;
+      if (command == KR_LOCAL_MODEL_SELECT) {
+        if (!voice || !installed)
+          return KR_ERR_INVALID_ARGUMENT;
+        mock.voice_selected_ = true;
+      } else {
+        installed = command == KR_LOCAL_MODEL_DOWNLOAD;
+        if (voice && !installed)
+          mock.voice_selected_ = false;
+      }
+      if (command != KR_LOCAL_MODEL_REMOVE)
+        notice = true;
+      mock.PushLocalModels();
+      return KR_OK;
+    } catch (...) {
+      return KR_ERR_PLATFORM;
     }
   };
   table_.edit_setting = [](void* self,
@@ -90,6 +124,59 @@ void MockBrowser::PushSettings() {
       Borrow(settings_download_), Borrow("Krypton preview fixture"),
       Borrow("Sample version"),   Borrow("UI fixture, not the browser host")};
   (void)ui_.set_settings_snapshot(ui_.self, &snapshot);
+}
+void MockBrowser::PushLocalModels() {
+  if (!attached_ || !settings_visible_ ||
+      settings_section_ != KR_SETTINGS_LANGUAGES)
+    return;
+  const auto flags = [](bool installed, bool notice) -> std::uint32_t {
+    auto value = installed
+                     ? KR_LOCAL_MODEL_INSTALLED | KR_LOCAL_MODEL_CAN_REMOVE
+                     : KR_LOCAL_MODEL_CAN_DOWNLOAD;
+    if (!notice)
+      value |= KR_LOCAL_MODEL_SHOW_FIRST_USE;
+    return value;
+  };
+  // The fixture's only voice pack stands in for the system language's pack.
+  auto voice =
+      flags(voice_installed_, voice_notice_) | KR_LOCAL_MODEL_SUGGESTED;
+  if (voice_selected_)
+    voice |= KR_LOCAL_MODEL_ACTIVE;
+  else if (voice_installed_)
+    voice |= KR_LOCAL_MODEL_CAN_SELECT;
+  const KrLocalModel rows[] = {
+      {0,
+       KR_LOCAL_MODEL_TRANSLATION,
+       flags(translation_installed_, translation_notice_),
+       -1,
+       53'000'000,
+       Borrow("English ↔ French"),
+       {}},
+      {0,
+       KR_LOCAL_MODEL_VOICE,
+       voice,
+       -1,
+       125'000'000,
+       Borrow("English — Small"),
+       {}}};
+  if (KR_HAS_SLOT(&ui_, KrShellUI, set_local_models_v2) &&
+      ui_.set_local_models_v2) {
+    const KrLocalModelWithVoiceVariant structured[] = {
+        {rows[0], {}, {}, {}, 0},
+        {rows[1], Borrow("en"), Borrow("English"),
+         Borrow("Moonshine v2 Streaming"), KR_VOICE_MODEL_SMALL}};
+    const KrLocalModelsSnapshotV2 snapshot{
+        sizeof(KrLocalModelsSnapshotV2), structured, std::size(structured),
+        sizeof(KrLocalModelWithVoiceVariant), false};
+    (void)ui_.set_local_models_v2(ui_.self, &snapshot);
+    return;
+  }
+  if (!KR_HAS_SLOT(&ui_, KrShellUI, set_local_models) || !ui_.set_local_models)
+    return;
+  const KrLocalModelsSnapshot snapshot{sizeof(KrLocalModelsSnapshot), rows,
+                                       std::size(rows), sizeof(KrLocalModel),
+                                       false};
+  (void)ui_.set_local_models(ui_.self, &snapshot);
 }
 void MockBrowser::CompleteSettings(std::uint64_t request,
                                    KrResult result) const {

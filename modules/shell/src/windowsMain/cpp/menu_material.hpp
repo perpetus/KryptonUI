@@ -8,6 +8,9 @@
 namespace kr::win {
 [[nodiscard]] winrt::Microsoft::UI::Xaml::Media::SystemBackdrop
 MakeMenuBackdrop(MenuMaterialKind selected);
+// Independent frosted surface: does not select or alter a menu material.
+[[nodiscard]] winrt::Microsoft::UI::Xaml::Media::SystemBackdrop
+MakeTabSwitcherBackdrop();
 
 [[nodiscard]] inline MenuMaterialKind ResolveMenuMaterial(
     MenuMaterialKind selected) noexcept {

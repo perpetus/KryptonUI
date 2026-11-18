@@ -24,14 +24,22 @@ class SettingsWindow {
   SettingsWindow& operator=(const SettingsWindow&) = delete;
   void Render(const ShellViewModel& vm);
   void OnPointerPress(HWND target);
+  [[nodiscard]] bool Owns(HWND target) const noexcept {
+    return input_target_.Owns(target);
+  }
+  [[nodiscard]] bool OwnsInput() const noexcept {
+    return visible_ || hide_.IsPending();
+  }
 
  private:
   void Build();
   void Dismiss();
+  void Hide();
   void Search();
   void SavePosition();
   void Backdrop();
   void Position();
+  [[nodiscard]] bool DialogOpen() const;
   SettingsStyle style_;
   ThemeBackdrop backdrop_;
   ThemeVm theme_;
@@ -42,6 +50,7 @@ class SettingsWindow {
   media::SolidColorBrush content_background_{nullptr}, accent_{nullptr},
       accent_text_{nullptr};
   std::unique_ptr<BrowserSettingsPanel> browser_;
+  std::unique_ptr<LocalModelsPanel> local_models_;
   struct SearchEntry {
     SettingsEntry entry;
     std::string label, description;

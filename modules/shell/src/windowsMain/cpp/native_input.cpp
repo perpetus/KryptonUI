@@ -121,6 +121,16 @@ struct ThreadInput {
   bool forwarding_key = false;
 };
 thread_local ThreadInput input;
+
+bool WithinOwnedWindow(HWND owner, HWND window) noexcept {
+  if (!owner)
+    return false;
+  for (HWND current = window; current;
+       current = GetWindow(GetAncestor(current, GA_ROOT), GW_OWNER))
+    if (current == owner || IsChild(owner, current))
+      return true;
+  return false;
+}
 }  // namespace
 
 NativeInputTarget::~NativeInputTarget() {
@@ -180,22 +190,18 @@ std::span<const NativeInputRoot> NativeInputTarget::Roots() noexcept {
 }
 
 bool NativeInputTarget::Owns(HWND window) const noexcept {
-  if (!window_)
-    return false;
-  for (HWND current = window; current;
-       current = GetWindow(GetAncestor(current, GA_ROOT), GW_OWNER))
-    if (current == window_ || IsChild(window_, current))
-      return true;
-  return false;
+  return WithinOwnedWindow(window_, window);
 }
 
 void ReleaseFocus(HWND content, HWND fallback, HWND host) noexcept {
   const HWND focus = GetFocus();
-  if (!content || !focus || (focus != content && !IsChild(content, focus)))
+  if (!WithinOwnedWindow(content, focus) ||
+      !WithinOwnedWindow(host, GetForegroundWindow()))
     return;
-  const auto usable = [content](HWND window) {
-    return window && window != content && !IsChild(content, window) &&
-           IsWindowVisible(window);
+  const auto usable = [content, host](HWND window) {
+    return WithinOwnedWindow(host, window) &&
+           !WithinOwnedWindow(content, window) && IsWindowVisible(window) &&
+           IsWindowEnabled(window);
   };
   if (usable(fallback))
     SetFocus(fallback);
@@ -279,7 +285,8 @@ NativeInput* NativeInput::FindOwner(HWND window) noexcept {
   for (HWND root = GetAncestor(window, GA_ROOT); root;
        root = GetWindow(root, GW_OWNER))
     for (auto* candidate : input.windows)
-      if (candidate->parent_ == root || IsChild(candidate->parent_, root))
+      if (candidate->enabled_ &&
+          (candidate->parent_ == root || IsChild(candidate->parent_, root)))
         return candidate;
   return nullptr;
 }
@@ -287,17 +294,26 @@ NativeInput* NativeInput::FindOwner(HWND window) noexcept {
 LRESULT CALLBACK NativeInput::FocusHook(int code,
                                         WPARAM window,
                                         LPARAM previous) noexcept {
-  const HWND target = reinterpret_cast<HWND>(window);
-  if (code == HCBT_SETFOCUS && NativeInputTarget::Contains(target))
-    if (auto* owner = FindOwner(target); owner && owner->focused_) {
-      const auto callback = owner->focused_;
-      void* context = owner->context_;
+  if (code == HCBT_SETFOCUS) {
+    const HWND target = reinterpret_cast<HWND>(window);
+    const HWND old_focus = reinterpret_cast<HWND>(previous);
+    const auto notify = [target, old_focus](NativeInput* owner) {
+      if (!owner || !owner->focused_)
+        return;
       try {
-        callback(context, target);
+        owner->focused_(owner->context_, target, old_focus);
       } catch (...) {
         OutputDebugStringW(L"KryptonUI focus notification failed\n");
       }
-    }
+    };
+    auto* from =
+        NativeInputTarget::Contains(old_focus) ? FindOwner(old_focus) : nullptr;
+    auto* to =
+        NativeInputTarget::Contains(target) ? FindOwner(target) : nullptr;
+    notify(from);
+    if (to != from)
+      notify(to);
+  }
   return CallNextHookEx(nullptr, code, window, previous);
 }
 

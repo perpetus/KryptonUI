@@ -6,6 +6,7 @@
 .EXAMPLE
   pwsh tools/dev.ps1 configure
   pwsh tools/dev.ps1 build -Config Release
+  pwsh tools/dev.ps1 build -Preset release-max
   pwsh tools/dev.ps1 test
   pwsh tools/dev.ps1 preview --dark --tabs 200
   pwsh tools/dev.ps1 screenshot out.png --dark
@@ -23,7 +24,7 @@ param(
   [ValidateSet('Debug', 'Release')]
   [string]$Config = 'Debug',
 
-  [ValidateSet('windows', 'windows-clang', 'headless')]
+  [ValidateSet('windows', 'windows-clang', 'release-max', 'headless')]
   [string]$Preset = 'windows',
 
   [ValidateRange(0, 2147483647)]
@@ -34,11 +35,20 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($Preset -eq 'release-max') {
+  if ($PSBoundParameters.ContainsKey('Config') -and $Config -ne 'Release') {
+    throw 'release-max supports only -Config Release.'
+  }
+  if ($Command -in @('test', 'preview', 'screenshot')) {
+    throw 'release-max builds only the production UI DLL; use a development preset for this command.'
+  }
+  $Config = 'Release'
+}
 $root = Split-Path -Parent $PSScriptRoot
 $buildDir = Join-Path $root "out/build/$Preset"
 $binDir = Join-Path $buildDir "bin/$Config"
-# The headless preset is single-purpose; the Windows ones are per config.
-$buildPreset = if ($Preset -eq 'headless') { 'headless' } else { "$Preset-$($Config.ToLower())" }
+# Single-purpose presets already identify their configuration.
+$buildPreset = if ($Preset -in @('headless', 'release-max')) { $Preset } else { "$Preset-$($Config.ToLower())" }
 
 function Enter-DevShell {
   if ($env:VSCMD_VER) { return }  # already inside a developer shell

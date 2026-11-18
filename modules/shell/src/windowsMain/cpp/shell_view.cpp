@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdio>
 #include <format>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <type_traits>
@@ -49,6 +50,7 @@
 #include "split_chooser.hpp"
 #include "tab_list.hpp"
 #include "tab_preview_surface.hpp"
+#include "tab_switcher.hpp"
 #include "theme_backdrop.hpp"
 #include "theme_editor.hpp"
 #include "top_chrome.hpp"
@@ -82,10 +84,11 @@ bool IsPointerPress(UINT message) noexcept {
          message == WM_POINTERDOWN;
 }
 
-bool IsPointerRelease(UINT message) noexcept {
+bool EndsPointerInteraction(UINT message) noexcept {
   return message == WM_LBUTTONUP || message == WM_RBUTTONUP ||
          message == WM_MBUTTONUP || message == WM_XBUTTONUP ||
-         message == WM_POINTERUP;
+         message == WM_POINTERUP || message == WM_CAPTURECHANGED ||
+         message == WM_POINTERCAPTURECHANGED || message == WM_CANCELMODE;
 }
 
 HWND WindowOf(const hosting::DesktopWindowXamlSource& source) {
@@ -156,9 +159,12 @@ class WinUIShellView final : public ShellView {
  public:
   WinUIShellView(HWND parent,
                  ShellViewDelegate& delegate,
-                 const ThemeVm& initial_theme)
+                 const ThemeVm& initial_theme,
+                 bool hosted)
       : parent_(parent),
         delegate_(delegate),
+        hosted_(hosted),
+        presented_(!hosted),
         tab_previews_(parent, motion_),
         glass_(delegate_,
                [this](const xaml::FrameworkElement& element) {
@@ -274,17 +280,31 @@ class WinUIShellView final : public ShellView {
     };
     initialize(source_, sidebar_surface_.Root(), input_targets_[0]);
     initialize(toolbar_source_, toolbar_surface_.Root(), input_targets_[1]);
-    if (auto result = titlebar_.Initialize(parent_, delegate_); !result)
-      platform::WriteDefaultLog(LogLevel::kWarning, result.error().message);
-    titlebar_.ApplyTheme(initial_theme, brushes_.high_contrast());
-    if (auto result = frame_.Initialize(
-            parent_, this,
-            [](void* self) {
-              static_cast<WinUIShellView*>(self)->motion_.RefreshContrast();
-            },
-            [](void* self, bool active) {
-              static_cast<WinUIShellView*>(self)->OnActivationChanged(active);
-            });
+    // A hosted shell shares a frame whose caption, hit testing and backdrop
+    // belong to the shell that created it. It follows that caption's metrics.
+    if (!hosted_) {
+      if (auto result = titlebar_.Initialize(parent_, delegate_); !result)
+        platform::WriteDefaultLog(LogLevel::kWarning, result.error().message);
+      titlebar_.ApplyTheme(initial_theme, brushes_.high_contrast());
+    } else {
+      NativeTitleBar::Listen(
+          parent_, this, [](void* self, const NativeTitleBarMetrics& metrics) {
+            auto& view = *static_cast<WinUIShellView*>(self);
+            if (view.presented_)
+              view.delegate_.OnNativeTitleBarChanged(metrics);
+          });
+    }
+    constexpr NativeFrame::SettingsChanged settings = [](void* self) {
+      static_cast<WinUIShellView*>(self)->motion_.RefreshContrast();
+    };
+    constexpr NativeFrame::ActivationChanged activation = [](void* self,
+                                                             bool active) {
+      static_cast<WinUIShellView*>(self)->OnActivationChanged(active);
+    };
+    if (auto result =
+            hosted_
+                ? frame_.InitializeHosted(parent_, this, settings, activation)
+                : frame_.Initialize(parent_, this, settings, activation);
         !result)
       throw winrt::hresult_error(E_FAIL,
                                  winrt::to_hstring(result.error().message));
@@ -299,16 +319,21 @@ class WinUIShellView final : public ShellView {
               return static_cast<WinUIShellView*>(self)
                   ->delegate_.OnUnhandledKey(&message);
             },
-            [](void* self, HWND target) {
+            [](void* self, HWND target, HWND previous) {
               auto& view = *static_cast<WinUIShellView*>(self);
+              view.command_bar_.NativeFocusChanged(target, previous);
+              if (!NativeInputTarget::Contains(target) ||
+                  !view.input_.Owns(target))
+                return;
               view.trace_.Record(InputTraceEvent::kFocus, target,
                                  view.focus_.generation(),
-                                 reinterpret_cast<std::uintptr_t>(GetFocus()));
+                                 reinterpret_cast<std::uintptr_t>(previous));
               view.QueueFocusReturn();
             });
         !result)
       throw winrt::hresult_error(E_FAIL,
                                  winrt::to_hstring(result.error().message));
+    input_.SetEnabled(presented_);
     WireRoot(false, events_[0]);
     WireRoot(true, events_[1]);
     sidebar_drop_ = std::make_unique<UrlDropTarget>(context_, root_);
@@ -316,6 +341,7 @@ class WinUIShellView final : public ShellView {
   }
 
   ~WinUIShellView() override {
+    NativeTitleBar::Unlisten(this);
     trace_.Dump();
     focus_.SetActive(false);
     lifetime_.reset();
@@ -335,6 +361,7 @@ class WinUIShellView final : public ShellView {
     delayed_tasks_.Reset();
     for (auto& events : events_)
       events.Reset();
+    tab_switcher_.reset();
     tab_previews_.Reset();
     titlebar_.Reset();
     menu_loaded_.revoke();
@@ -390,7 +417,8 @@ class WinUIShellView final : public ShellView {
       brushes_.Apply(vm.theme);
       if (profile)
         theme_stages[0] = std::chrono::steady_clock::now();
-      titlebar_.ApplyTheme(vm.theme, brushes_.high_contrast());
+      if (!hosted_)
+        titlebar_.ApplyTheme(vm.theme, brushes_.high_contrast());
       if (profile)
         theme_stages[1] = std::chrono::steady_clock::now();
       const auto theme =
@@ -432,12 +460,14 @@ class WinUIShellView final : public ShellView {
       frame_.Update(layout_.drag_area(), drag_exclusions_, fullscreen_);
       client_ = vm.client;
       scale_ = vm.scale_factor;
-      titlebar_.SetScale(vm.scale_factor);
-      if (auto result = titlebar_.SetCaptionVisible(
-              !fullscreen_ &&
-              (!layout_.caption_overlay || layout_.caption_visible));
-          !result)
-        platform::WriteDefaultLog(LogLevel::kWarning, result.error().message);
+      if (!hosted_) {
+        titlebar_.SetScale(vm.scale_factor);
+        if (auto result = titlebar_.SetCaptionVisible(
+                !fullscreen_ &&
+                (!layout_.caption_overlay || layout_.caption_visible));
+            !result)
+          platform::WriteDefaultLog(LogLevel::kWarning, result.error().message);
+      }
       // Preserve outgoing rows until the whole toolbar has slid out. Applying
       // the hidden layout here collapses them in the middle of the transition.
       const bool toolbar_leaving =
@@ -450,12 +480,13 @@ class WinUIShellView final : public ShellView {
                                    header_.LibrarySlot());
       tabs_.SetIconOnly(layout_.sidebar_icon_only);
       splitter_.SetLayout(layout_, vm.scale_factor);
+      // Only the presented profile's shell shows chrome over a shared frame.
       PlaceIsland(source_, root_, brushes_.sidebar_gradient, island_hide_[0],
                   input_targets_[0], layout_.sidebar, layout_.sidebar_island,
-                  layout_.sidebar_visible, vm.scale_factor);
+                  layout_.sidebar_visible && presented_, vm.scale_factor);
       PlaceIsland(toolbar_source_, toolbar_root_, brushes_.toolbar_gradient,
                   island_hide_[1], input_targets_[1], layout_.toolbar,
-                  layout_.toolbar_island, layout_.toolbar_visible,
+                  layout_.toolbar_island, layout_.toolbar_visible && presented_,
                   vm.scale_factor);
       anchors_dirty_ = true;
     }
@@ -595,10 +626,10 @@ class WinUIShellView final : public ShellView {
       boost_editor_->Render(*vm.boost_editor, client_, scale_,
                             root_.RequestedTheme(), vm.theme.accent);
     mark(5);
-    if (vm.changed.Has(Dirty::kCommandBar) || vm.changed.Has(Dirty::kLayout) ||
-        vm.changed.Has(Dirty::kWindow) || vm.changed.Has(Dirty::kImages) ||
-        vm.changed.Has(Dirty::kTheme) || vm.changed.Has(Dirty::kText) ||
-        !rendered_) {
+    if (vm.changed.Has(Dirty::kCommandBar) || vm.changed.Has(Dirty::kActions) ||
+        vm.changed.Has(Dirty::kLayout) || vm.changed.Has(Dirty::kWindow) ||
+        vm.changed.Has(Dirty::kImages) || vm.changed.Has(Dirty::kTheme) ||
+        vm.changed.Has(Dirty::kText) || !rendered_) {
       command_bar_.Render(vm.command_bar, client_, scale_,
                           root_.RequestedTheme(), vm.images);
     }
@@ -616,6 +647,21 @@ class WinUIShellView final : public ShellView {
       onboarding_->Render(vm);
       anchors_dirty_ = true;
     }
+    if (vm.tab_switcher.open && !tab_switcher_)
+      tab_switcher_ = std::make_unique<TabSwitcher>(parent_, context_, [this] {
+        SyncFocusSurfaces();
+        QueueFocusReturn();
+        QueueHoverRefresh();
+      });
+    if (tab_switcher_ &&
+        (vm.changed.HasAny(Dirty::kTabSwitcher | Dirty::kTabs | Dirty::kImages |
+                           Dirty::kTheme | Dirty::kText | Dirty::kWindow |
+                           Dirty::kLayout) ||
+         !rendered_)) {
+      tab_switcher_->Render(vm, root_.RequestedTheme());
+      if (!vm.tab_switcher.open)
+        switcher_keys_ = false;
+    }
     if (library_.IsOpen())
       library_.Raise();
     if (command_bar_.IsOpen())
@@ -624,6 +670,8 @@ class WinUIShellView final : public ShellView {
       theme_editor_.Raise();
     else
       menu_.Raise();
+    if (tab_switcher_ && tab_switcher_->OwnsInput())
+      tab_switcher_->Raise();
     if (onboarding_)
       onboarding_->Raise();
     if (vm.changed.Has(Dirty::kLayout) || vm.changed.Has(Dirty::kWindow) ||
@@ -768,6 +816,72 @@ class WinUIShellView final : public ShellView {
   bool OwnsWindowFrame() const noexcept override { return true; }
 
   bool ProcessNativeMessage(const MSG& native) {
+    // Settings and its popups have their own XAML root. Let their controls
+    // process input before the browser's switcher and focus-loan handlers.
+    if (settings_ && settings_->Owns(native.hwnd)) {
+      if (pointer_down_ && EndsPointerInteraction(native.message)) {
+        pointer_down_ = false;
+        QueueFocusReturn();
+      }
+      return false;
+    }
+    const bool key_down =
+        native.message == WM_KEYDOWN || native.message == WM_SYSKEYDOWN;
+    const bool key_up =
+        native.message == WM_KEYUP || native.message == WM_SYSKEYUP;
+    const bool switcher_open =
+        switcher_keys_ || (tab_switcher_ && tab_switcher_->OwnsInput());
+    if (key_down && native.wParam == VK_TAB && GetKeyState(VK_CONTROL) < 0 &&
+        GetKeyState(VK_MENU) >= 0 && !composing_ && !GetCapture() &&
+        (switcher_open || (!modal_open_ && !BrowserToolsOwnInput() &&
+                           !(settings_ && settings_->OwnsInput()) &&
+                           !menu_.OwnsInput() && !command_bar_.OwnsInput() &&
+                           !theme_editor_.IsOpen() && !HasOpenFlyouts() &&
+                           !(boost_editor_ && boost_editor_->OwnsInput())))) {
+      const bool handled =
+          delegate_.OnTabSwitcherMoved(GetKeyState(VK_SHIFT) < 0 ? -1 : 1);
+      if (handled) {
+        switcher_keys_ = true;
+        tabs_.DismissHover();
+        sidebar_.DismissHoverPopups();
+        return true;
+      }
+    }
+    if (switcher_open) {
+      if ((key_up &&
+           (native.wParam == VK_CONTROL || native.wParam == VK_LCONTROL ||
+            native.wParam == VK_RCONTROL) &&
+           GetKeyState(VK_CONTROL) >= 0) ||
+          (key_down && native.wParam == VK_RETURN)) {
+        switcher_keys_ = false;
+        if (tab_switcher_)
+          tab_switcher_->Close();
+        delegate_.OnTabSwitcherAccepted(
+            std::numeric_limits<std::size_t>::max());
+        SyncFocusSurfaces();
+        QueueFocusReturn();
+        return true;
+      }
+      if (key_down && (native.wParam == VK_ESCAPE || native.wParam == VK_F6)) {
+        switcher_keys_ = false;
+        if (tab_switcher_)
+          tab_switcher_->Close();
+        delegate_.OnTabSwitcherDismissed();
+        SyncFocusSurfaces();
+        QueueFocusReturn();
+        return true;
+      }
+      if (key_down && (native.wParam == VK_LEFT || native.wParam == VK_RIGHT ||
+                       native.wParam == VK_UP || native.wParam == VK_DOWN)) {
+        const int columns = tab_switcher_ ? tab_switcher_->Columns() : 1;
+        const int delta = native.wParam == VK_LEFT    ? -1
+                          : native.wParam == VK_RIGHT ? 1
+                          : native.wParam == VK_UP    ? -columns
+                                                      : columns;
+        (void)delegate_.OnTabSwitcherMoved(delta);
+        return true;
+      }
+    }
     if ((native.message == WM_KEYDOWN || native.message == WM_SYSKEYDOWN) &&
         native.wParam == VK_ESCAPE && tabs_.IsDragging()) {
       // Escape ends a sidebar drag. Consume it here, before the key hand-back
@@ -786,9 +900,13 @@ class WinUIShellView final : public ShellView {
       trace_.Dump();
     if (IsPointerPress(native.message))
       OnPointerPress(native.hwnd, native.pt);
-    else if (IsPointerRelease(native.message) ||
-             native.message == WM_CAPTURECHANGED ||
-             native.message == WM_CANCELMODE) {
+    else if (command_bar_.IsOpen() && (native.message == WM_NCLBUTTONDOWN ||
+                                       native.message == WM_NCRBUTTONDOWN ||
+                                       native.message == WM_NCMBUTTONDOWN ||
+                                       native.message == WM_NCXBUTTONDOWN ||
+                                       native.message == WM_NCPOINTERDOWN))
+      DismissCommandBarAt(native.pt);
+    else if (EndsPointerInteraction(native.message)) {
       pointer_down_ = false;
       QueueFocusReturn();
     } else if ((native.message == WM_MOUSEMOVE ||
@@ -799,19 +917,18 @@ class WinUIShellView final : public ShellView {
       // XAML can miss the exit into the native page. Return keyboard focus
       // on that crossing, after the pointer has finished using chrome.
       QueueFocusReturn();
-    else if ((native.message == WM_KEYDOWN ||
-              native.message == WM_SYSKEYDOWN) &&
-             NativeInputTarget::Contains(native.hwnd) && !menu_.IsOpen() &&
+    else if (key_down && !composing_ &&
+             NativeInputTarget::Contains(native.hwnd) &&
              FocusWithinSteadyRoot()) {
       // Pointer focus must not strand page typing when the cursor stays over
       // chrome. Tab/F6 deliberately enter keyboard navigation instead.
       if (native.wParam == VK_TAB || native.wParam == VK_F6) {
-        focus_.Enter(FocusOwner::kKeyboardChrome);
-        return_focus_ = nullptr;
-      } else {
-        if (focus_.owner() == FocusOwner::kPointerChrome ||
-            focus_.owner() == FocusOwner::kPage)
-          focus_.Enter(FocusOwner::kPage);
+        SyncFocusSurfaces();
+        if (focus_.owner() != FocusOwner::kTransient) {
+          focus_.Enter(FocusOwner::kKeyboardChrome);
+          return_focus_ = nullptr;
+        }
+      } else if (return_focus_) {
         ReturnFocus(true);
         if (HostFocus(GetFocus()))
           // The input hook retargets this original queued key to the host.
@@ -904,8 +1021,8 @@ class WinUIShellView final : public ShellView {
          (!layout_.sidebar_visible || layout_.sidebar_overlays)) ||
         (!layout_.toolbar.empty() &&
          (!layout_.toolbar_visible || layout_.toolbar_overlays));
-    if (IsPointerPress(native.message) || IsPointerRelease(native.message) ||
-        native.message == WM_CAPTURECHANGED || native.message == WM_CANCELMODE)
+    if (IsPointerPress(native.message) ||
+        EndsPointerInteraction(native.message))
       QueueHoverRefresh();
     if ((revealable || sidebar_.HasActiveHoverPopup()) &&
         (native.message == WM_MOUSEMOVE || native.message == WM_NCMOUSEMOVE ||
@@ -923,6 +1040,9 @@ class WinUIShellView final : public ShellView {
     // menu acquires focus, rather than hiding a hover preview on a later
     // render.
     sidebar_.DismissHoverPopups();
+    // Finish the editor's native popup handoff before a menu borrows focus.
+    if (command_bar_.IsOpen())
+      command_bar_.Close();
     // A menu over the page, as from a right click there, hands keys back to
     // the page when it closes.
     if (const HWND focus = HostFocus(GetFocus()))
@@ -1056,14 +1176,16 @@ class WinUIShellView final : public ShellView {
            (task_manager_ && task_manager_->OwnsInput());
   }
   void SyncFocusSurfaces(bool inspect_popups = true) {
-    focus_.SetSurface(FocusSurface::kMenu, menu_.IsOpen());
-    focus_.SetSurface(FocusSurface::kSearch, command_bar_.IsOpen());
+    focus_.SetSurface(FocusSurface::kMenu, menu_.OwnsInput());
+    focus_.SetSurface(FocusSurface::kSearch, command_bar_.OwnsInput());
     focus_.SetSurface(FocusSurface::kEditor,
-                      theme_editor_.IsOpen() ||
+                      (tab_switcher_ && tab_switcher_->OwnsInput()) ||
+                          theme_editor_.IsOpen() ||
                           (boost_editor_ && boost_editor_->OwnsInput()));
     focus_.SetSurface(FocusSurface::kLibrary, library_.OwnsInput());
     focus_.SetSurface(FocusSurface::kModal,
                       modal_open_ || BrowserToolsOwnInput() ||
+                          (settings_ && settings_->OwnsInput()) ||
                           (boost_editor_ && boost_editor_->OwnsInput()));
     if (inspect_popups)
       focus_.SetSurface(FocusSurface::kFlyout, HasOpenFlyouts());
@@ -1071,10 +1193,11 @@ class WinUIShellView final : public ShellView {
 
   bool HoverPopupAllowed(const xaml::FrameworkElement& preview,
                          bool active) const {
-    if (modal_open_ || BrowserToolsOwnInput() || url_drag_active_ ||
-        (boost_editor_ && boost_editor_->OwnsInput()) || composing_ ||
-        menu_.IsOpen() || command_bar_.IsOpen() || theme_editor_.IsOpen() ||
-        library_.OwnsInput() ||
+    if ((tab_switcher_ && tab_switcher_->OwnsInput()) || modal_open_ ||
+        BrowserToolsOwnInput() || (settings_ && settings_->OwnsInput()) ||
+        url_drag_active_ || (boost_editor_ && boost_editor_->OwnsInput()) ||
+        composing_ || menu_.OwnsInput() || command_bar_.OwnsInput() ||
+        theme_editor_.IsOpen() || library_.OwnsInput() ||
         GetAncestor(GetForegroundWindow(), GA_ROOTOWNER) !=
             GetAncestor(parent_, GA_ROOTOWNER))
       return false;
@@ -1108,27 +1231,63 @@ class WinUIShellView final : public ShellView {
   }
 
   bool WorkspaceGesturesAllowed() const {
-    return !modal_open_ && !BrowserToolsOwnInput() && !url_drag_active_ &&
+    return !(tab_switcher_ && tab_switcher_->OwnsInput()) && !modal_open_ &&
+           !BrowserToolsOwnInput() && !url_drag_active_ &&
            !(boost_editor_ && boost_editor_->OwnsInput()) && !composing_ &&
-           layout_.sidebar_visible && !menu_.IsOpen() &&
-           !command_bar_.IsOpen() && !theme_editor_.IsOpen() &&
+           layout_.sidebar_visible && !menu_.OwnsInput() &&
+           !command_bar_.OwnsInput() && !theme_editor_.IsOpen() &&
            !library_.OwnsInput() && !HasOpenFlyouts() &&
            GetAncestor(GetForegroundWindow(), GA_ROOTOWNER) ==
                GetAncestor(parent_, GA_ROOTOWNER);
+  }
+
+  void SetPresented(bool presented) override {
+    if (presented_ == presented)
+      return;
+    presented_ = presented;
+    input_.SetEnabled(presented);
+    if (!presented) {
+      // The Shell has already dismissed its transient state. Close native
+      // popups now and release pointer/focus bookkeeping like a deactivation.
+      menu_.Close();
+      command_bar_.Close();
+      theme_editor_.Close();
+      library_.Close();
+      if (tab_switcher_)
+        tab_switcher_->Close();
+      sidebar_.DismissHoverPopups();
+      pending_focus_.reset();
+      composing_ = false;
+      pointer_down_ = false;
+      tabs_.ResetPointerState();
+      return_focus_ = nullptr;
+    } else if (hosted_) {
+      if (const auto metrics = NativeTitleBar::Current(parent_))
+        delegate_.OnNativeTitleBarChanged(*metrics);
+    }
+    // Re-place both islands and anchors on the next render.
+    rendered_ = false;
+    anchors_dirty_ = true;
   }
 
   void OnActivationChanged(bool active) {
     focus_.SetActive(active);
     trace_.Record(InputTraceEvent::kActivation, GetFocus(), focus_.generation(),
                   active);
-    if (!active) {
-      url_drag_active_ = false;
-      pending_focus_.reset();
-      composing_ = false;
-      pointer_down_ = false;
-      tabs_.ResetPointerState();
-      return_focus_ = nullptr;
+    if (active) {
+      // Win32 may restore the island that held pointer focus before Alt+Tab.
+      QueueFocusReturn();
+      return;
     }
+    switcher_keys_ = false;
+    if (tab_switcher_)
+      tab_switcher_->Close();
+    delegate_.OnTabSwitcherDismissed();
+    url_drag_active_ = false;
+    pending_focus_.reset();
+    composing_ = false;
+    pointer_down_ = false;
+    tabs_.ResetPointerState();
   }
 
   void WirePointerSource(bool toolbar, RootEvents& events) {
@@ -1307,6 +1466,15 @@ class WinUIShellView final : public ShellView {
                          [bridge] { bridge.Hide(); });
   }
 
+  void DismissCommandBarAt(POINT screen_point) {
+    if (!ScreenToClient(parent_, &screen_point))
+      return;
+    const Point point{static_cast<float>(screen_point.x) / scale_,
+                      static_cast<float>(screen_point.y) / scale_};
+    if (!command_bar_.Contains(point))
+      command_bar_.Dismiss();
+  }
+
   // Steady chrome borrows Win32 keyboard focus while the pointer uses it and
   // while a menu is open over the host. Keep it until the pointer leaves, so
   // focus loss cannot reset hover or cancel a control's pending click. Win32
@@ -1316,6 +1484,11 @@ class WinUIShellView final : public ShellView {
   void OnPointerPress(HWND target, std::optional<POINT> point = std::nullopt) {
     if (settings_)
       settings_->OnPointerPress(target);
+    if (command_bar_.IsOpen()) {
+      POINT cursor{};
+      if (point || GetCursorPos(&cursor))
+        DismissCommandBarAt(point.value_or(cursor));
+    }
     const HWND focus = GetFocus();
     trace_.Record(InputTraceEvent::kPress, target, focus_.generation(),
                   reinterpret_cast<std::uintptr_t>(focus));
@@ -1334,7 +1507,8 @@ class WinUIShellView final : public ShellView {
     } else if (target == parent_ || IsChild(parent_, target)) {
       focus_.Enter(FocusOwner::kPage);
       return_focus_ = HostFocus(target) ? target : parent_;
-      if (focus && NativeInputTarget::Contains(focus) && input_.Owns(focus))
+      if (focus && NativeInputTarget::Contains(focus) && input_.Owns(focus) &&
+          !GetCapture())
         SetFocus(parent_);
     }
   }
@@ -1444,6 +1618,8 @@ class WinUIShellView final : public ShellView {
   }
 
   void ReturnFocus(bool keyboard = false) {
+    if (!presented_ || !input_.Owns(GetForegroundWindow()))
+      return;
     HWND target = return_focus_;
     if (target && (!HostFocus(target) || !IsWindowVisible(target)))
       target = return_focus_ = parent_;
@@ -1528,7 +1704,7 @@ class WinUIShellView final : public ShellView {
         return;
       hover_refresh_queued_ = false;
       tabs_.RefreshPointerHover();
-      if (menu_.IsOpen())
+      if (menu_.OwnsInput() || (tab_switcher_ && tab_switcher_->OwnsInput()))
         tabs_.DismissHover();
       sidebar_.RefreshHoverPopups();
       POINT cursor{};
@@ -1538,11 +1714,11 @@ class WinUIShellView final : public ShellView {
                               ? url_drag_point_
                               : Point{static_cast<float>(cursor.x) / scale_,
                                       static_cast<float>(cursor.y) / scale_};
-      const bool keep_open = BrowserToolsOwnInput() || menu_.IsOpen() ||
-                             command_bar_.IsOpen() || tabs_.IsPreviewOpen() ||
-                             theme_editor_.IsOpen() || library_.OwnsInput() ||
-                             (boost_editor_ && boost_editor_->OwnsInput()) ||
-                             HasOpenFlyouts();
+      const bool keep_open =
+          BrowserToolsOwnInput() || menu_.OwnsInput() ||
+          command_bar_.OwnsInput() || tabs_.IsPreviewOpen() ||
+          theme_editor_.IsOpen() || library_.OwnsInput() ||
+          (boost_editor_ && boost_editor_->OwnsInput()) || HasOpenFlyouts();
       const bool sidebar_revealable =
           !layout_.sidebar.empty() &&
           (!layout_.sidebar_visible || layout_.sidebar_overlays);
@@ -1811,6 +1987,8 @@ class WinUIShellView final : public ShellView {
 
   HWND parent_;
   ShellViewDelegate& delegate_;
+  const bool hosted_;
+  bool presented_;
   std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
   bool anchors_dirty_ = true;
   const bool trace_menus_ = EnvFlag("KR_UI_MENU_TRACE");
@@ -1843,6 +2021,8 @@ class WinUIShellView final : public ShellView {
   IconSet icons_{motion_, brushes_};
   GlassMaterials glass_;
   ViewContext context_;
+  bool switcher_keys_ = false;
+  std::unique_ptr<TabSwitcher> tab_switcher_;
   std::unique_ptr<SettingsWindow> settings_;
   std::unique_ptr<OnboardingView> onboarding_;
   std::unique_ptr<BrowserToolWindow> task_manager_, permission_manager_;
@@ -1914,7 +2094,8 @@ Result<std::unique_ptr<ShellView>> CreateShellView(
   }
   try {
     return std::make_unique<WinUIShellView>(
-        static_cast<HWND>(params.parent_window), delegate, params.theme);
+        static_cast<HWND>(params.parent_window), delegate, params.theme,
+        params.hosted);
   } catch (const winrt::hresult_error& error) {
     WriteDefaultLog(LogLevel::kError, winrt::to_string(error.message()));
     return Fail(ErrorCode::kPlatform,

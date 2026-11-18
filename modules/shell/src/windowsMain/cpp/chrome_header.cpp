@@ -409,14 +409,21 @@ void ChromeHeader::Render(const ShellViewModel& vm) {
     window_controls_.Visibility(
         window_controls_visible_ ? Visibility::Visible : Visibility::Collapsed);
   }
-  if (vm.changed.Has(Dirty::kNav) || vm.changed.Has(Dirty::kWindow) ||
+  if (vm.changed.HasAny(Dirty::kNav | Dirty::kWindow | Dirty::kTheme) ||
       !rendered_) {
-    back_->control.IsEnabled(vm.header.can_go_back);
-    back_->icon->SetBrush(vm.header.can_go_back ? context_.brushes.icon
-                                                : context_.brushes.muted);
-    forward_->icon->SetBrush(vm.header.can_go_forward ? context_.brushes.icon
-                                                      : context_.brushes.muted);
-    forward_->control.IsEnabled(vm.header.can_go_forward);
+    const auto render_nav = [this](NativeButton& button, bool available) {
+      const bool high_contrast = context_.brushes.high_contrast();
+      button.control.IsEnabled(available);
+      button.control.Opacity(
+          available || high_contrast
+              ? 1.0
+              : kTokens.address_controls.navigation_disabled_opacity);
+      button.icon->SetBrush(!available && high_contrast
+                                ? context_.brushes.muted
+                                : context_.brushes.icon);
+    };
+    render_nav(*back_, vm.header.can_go_back);
+    render_nav(*forward_, vm.header.can_go_forward);
     if (loading_ != vm.header.is_loading || !rendered_) {
       loading_ = vm.header.is_loading;
       SetButtonText(*reload_, loading_ ? stop_text_ : reload_text_);
@@ -575,14 +582,21 @@ void ChromeHeader::ReconcileActions(
                          context_.delegate.OnActionInvoked(
                              id, context_.bounds(native->control));
                      });
-      button->right_tapped = button->control.RightTapped(
-          winrt::auto_revoke,
-          [this, id = action.id, native = button.get()](
-              auto&&, const xaml::Input::RightTappedRoutedEventArgs& args) {
-            context_.request_menu(MenuKind::kAction, id.value,
-                                  context_.bounds(native->control));
-            args.Handled(true);
-          });
+      if (action.kind == ActionKind::kZoomReset) {
+        button->glyph = Label({}, kTokens.type.size_small);
+        button->control.Width(std::numeric_limits<double>::quiet_NaN());
+        const auto padding = kTokens.address_controls.zoom_chip_padding;
+        button->control.Padding({padding, 0, padding, 0});
+      } else {
+        button->right_tapped = button->control.RightTapped(
+            winrt::auto_revoke,
+            [this, id = action.id, native = button.get()](
+                auto&&, const xaml::Input::RightTappedRoutedEventArgs& args) {
+              context_.request_menu(MenuKind::kAction, id.value,
+                                    context_.bounds(native->control));
+              args.Handled(true);
+            });
+      }
       panel.Children().InsertAt(index, button->control);
     }
     button->seen = seen;
@@ -592,8 +606,10 @@ void ChromeHeader::ReconcileActions(
       panel.Children().RemoveAt(position);
       panel.Children().InsertAt(index, button->control);
     }
-    const auto glyph = action.glyph.empty() ? winrt::hstring(L"\uE713")
-                                            : winrt::to_hstring(action.glyph);
+    const auto glyph = action.kind == ActionKind::kZoomReset
+                           ? winrt::to_hstring(action.label)
+                       : action.glyph.empty() ? winrt::hstring(L"\uE713")
+                                              : winrt::to_hstring(action.glyph);
     if (button->glyph.Text() != glyph)
       button->glyph.Text(glyph);
     const auto current = ActionIcon(*button, action.id);
@@ -645,12 +661,16 @@ void ChromeHeader::ReconcileActions(
     }
     ShowActionIcon(*button, action, icon);
     button->control.IsEnabled(action.enabled);
-    button->control.Background(action.active &&
-                                       action.kind != ActionKind::kSiteTools
-                                   ? context_.brushes.active
-                                   : context_.brushes.transparent);
+    button->control.Background(
+        action.kind == ActionKind::kZoomReset ? context_.brushes.pill
+        : action.active && action.kind != ActionKind::kSiteTools &&
+                action.kind != ActionKind::kTranslate
+            ? context_.brushes.active
+            : context_.brushes.transparent);
     if (button->tooltip_text != action.tooltip) {
       button->tooltip_text = action.tooltip;
+      if (action.kind == ActionKind::kZoomReset)
+        Accessible(button->control, winrt::to_hstring(action.tooltip));
       ToolTipService::SetToolTip(
           button->control, winrt::box_value(winrt::to_hstring(action.tooltip)));
     }
@@ -706,6 +726,7 @@ void ChromeHeader::ShowActionIcon(NativeButton& button,
                                   const ActionVm& action,
                                   const xaml::UIElement& icon) {
   auto found = action_badges_.find(action.id);
+  const bool translation = action.kind == ActionKind::kTranslate;
   if (found == action_badges_.end()) {
     if (action.badge.empty()) {
       if (button.control.Content() != icon)
@@ -714,16 +735,20 @@ void ChromeHeader::ShowActionIcon(NativeButton& button,
     }
     const auto& t = kTokens.action_badge;
     ActionBadge created;
-    created.text = Label({}, t.font_size);
+    created.text =
+        Label({}, translation ? kTokens.type.size_small : t.font_size);
     created.text.FontWeight(kBold);
-    created.text.LineHeight(t.font_size);
-    created.text.LineStackingStrategy(
-        xaml::LineStackingStrategy::BlockLineHeight);
+    if (!translation) {
+      created.text.LineHeight(t.font_size);
+      created.text.LineStackingStrategy(
+          xaml::LineStackingStrategy::BlockLineHeight);
+    }
     created.text.TextAlignment(xaml::TextAlignment::Center);
     created.text.TextTrimming(xaml::TextTrimming::None);
     created.badge = Border();
     created.badge.MinWidth(t.min_width);
-    created.badge.MaxWidth(t.max_width);
+    if (!translation)
+      created.badge.MaxWidth(t.max_width);
     created.badge.Padding(
         {t.padding_inline, 0, t.padding_inline, t.padding_bottom});
     created.badge.CornerRadius(UniformCorners(t.radius));
@@ -735,8 +760,21 @@ void ChromeHeader::ShowActionIcon(NativeButton& button,
     created.badge.Margin({0, t.offset_top + inset, t.offset_end + inset, 0});
     created.badge.Child(created.text);
     created.root = Grid();
-    created.root.Width(kTokens.spacing.action_icon_size);
-    created.root.Height(kTokens.spacing.action_icon_size);
+    if (translation) {
+      const auto& chip = kTokens.translation;
+      AddColumn(created.root, 0, xaml::GridUnitType::Auto);
+      AddColumn(created.root, 0, xaml::GridUnitType::Auto);
+      Grid::SetColumn(created.badge, 1);
+      created.badge.MinWidth(chip.chip_min_width);
+      created.badge.Height(chip.chip_height);
+      created.badge.Padding({chip.chip_padding, 0, chip.chip_padding, 0});
+      created.badge.Margin({chip.chip_gap, 0, 0, 0});
+      created.badge.VerticalAlignment(xaml::VerticalAlignment::Center);
+      created.text.VerticalAlignment(xaml::VerticalAlignment::Center);
+    } else {
+      created.root.Width(kTokens.spacing.action_icon_size);
+      created.root.Height(kTokens.spacing.action_icon_size);
+    }
     // Detach the icon from the button before the grid adopts it.
     button.control.Content(nullptr);
     created.root.Children().Append(icon);
@@ -745,6 +783,14 @@ void ChromeHeader::ShowActionIcon(NativeButton& button,
     found = action_badges_.emplace(action.id, std::move(created)).first;
   }
   auto& badge = found->second;
+  if (translation) {
+    button.control.Width(action.badge.empty()
+                             ? kTokens.spacing.button_size
+                             : std::numeric_limits<double>::quiet_NaN());
+    const auto padding =
+        action.badge.empty() ? 0 : kTokens.spacing.button_margin;
+    button.control.Padding({padding, 0, padding, 0});
+  }
   if (badge.root.Children().GetAt(0) != icon)
     badge.root.Children().SetAt(0, icon);
   badge.badge.Visibility(action.badge.empty() ? Visibility::Collapsed
@@ -757,13 +803,13 @@ void ChromeHeader::ShowActionIcon(NativeButton& button,
   const auto& t = kTokens.action_badge;
   auto& brushes = context_.brushes;
   const auto background =
-      brushes.high_contrast()
+      brushes.high_contrast() || translation
           ? brushes.text
           : brushes.For(action.badge_color.a() ? action.badge_color
                                                : Color{t.background});
   const auto foreground =
-      brushes.high_contrast()
-          ? brushes.menu_background
+      brushes.high_contrast() || translation
+          ? brushes.overlay
           : brushes.For(action.badge_text_color.a() ? action.badge_text_color
                                                     : Color{t.foreground});
   if (badge.badge.Background() != background)

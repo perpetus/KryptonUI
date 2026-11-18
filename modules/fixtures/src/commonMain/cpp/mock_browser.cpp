@@ -114,6 +114,9 @@ enum ActionIds : KrActionId {
   kActionDownloads = 3,
   kActionSiteData = 4,
   kActionCopyLink = 5,
+  kActionTranslate = 6,
+  kActionDictation = 7,
+  kActionZoomReset = 8,
 };
 
 enum MenuCommands : std::int32_t {
@@ -187,6 +190,31 @@ MockBrowser::MockBrowser(MockOptions options, MockHostCallbacks callbacks)
   table_.close_tab = [](void* self, KrTabId tab) noexcept {
     AtBoundary([&] { Self(self).Close(tab); });
   };
+  table_.request_tab_switcher_previews = [](void* self, std::uint32_t request,
+                                            const KrTabId* ids,
+                                            std::size_t count) noexcept {
+    AtBoundary([&] {
+      auto& mock = Self(self);
+      if (!ids || count > 6 || !mock.attached_ || !mock.ui_.set_tab_preview)
+        return;
+      for (std::size_t i = 0; i < count; ++i) {
+        if (mock.Find(ids[i])) {
+          const KrTabPreview preview{
+              sizeof(KrTabPreview),
+              ids[i],
+              0,
+              0,
+              KR_TAB_PREVIEW_SAMPLE | KR_TAB_PREVIEW_NO_IMAGE,
+              {},
+              {},
+              {},
+              {}};
+          (void)mock.ui_.set_tab_preview(mock.ui_.self, request, &preview);
+        }
+      }
+    });
+  };
+  table_.cancel_tab_switcher_previews = [](void*, std::uint32_t) noexcept {};
   table_.request_tab_preview = [](void* self, std::uint32_t request,
                                   KrTabId tab) noexcept {
     AtBoundary([&] { Self(self).RequestTabPreview(request, tab); });
@@ -334,6 +362,50 @@ MockBrowser::MockBrowser(MockOptions options, MockHostCallbacks callbacks)
         Self(self).EditWorkspace(kind, *space);
     });
   };
+  table_.set_space_profile = [](void* self, KrSpaceId space,
+                                KrProfileId profile,
+                                KrStr new_profile) noexcept -> KrResult {
+    KrResult result = KR_ERR_INVALID_ARGUMENT;
+    AtBoundary([&] {
+      result = Self(self).SetSpaceProfile(
+          space, profile,
+          new_profile.data
+              ? std::string_view(new_profile.data, new_profile.size)
+              : std::string_view{});
+    });
+    return result;
+  };
+  table_.create_space = [](void* self, const KrSpace* space,
+                           KrProfileId profile,
+                           KrStr new_profile) noexcept -> KrResult {
+    KrResult result = KR_ERR_INVALID_ARGUMENT;
+    AtBoundary([&] {
+      if (space && KR_HAS_FIELD(space, KrSpace, color))
+        result = Self(self).CreateSpace(
+            *space, profile,
+            new_profile.data
+                ? std::string_view(new_profile.data, new_profile.size)
+                : std::string_view{});
+    });
+    return result;
+  };
+  table_.start_dictation = [](void* self, uint32_t request) noexcept {
+    AtBoundary([&] {
+      auto& mock = Self(self);
+      if (KR_HAS_SLOT(&mock.ui_, KrShellUI, set_dictation) &&
+          mock.ui_.set_dictation) {
+        const auto error = Str("Voice typing is unavailable in the fixture.");
+        const KrDictationUpdate update{sizeof(KrDictationUpdate),
+                                       request,
+                                       KR_DICTATION_ERROR,
+                                       0,
+                                       {},
+                                       error};
+        mock.ui_.set_dictation(mock.ui_.self, &update);
+      }
+    });
+  };
+  table_.stop_dictation = [](void*, uint32_t) noexcept {};
   table_.invoke_action = [](void* self, KrActionId action,
                             KrRect anchor) noexcept {
     AtBoundary([&] {
@@ -345,6 +417,14 @@ MockBrowser::MockBrowser(MockOptions options, MockHostCallbacks callbacks)
         mock.OpenTab("krypton://downloads", KR_OPEN_NEW_TAB);
       } else if (action == kActionShield) {
         mock.OpenTab("krypton://settings/privacy", KR_OPEN_NEW_TAB);
+      } else if (action == kActionTranslate) {
+        if (KR_HAS_SLOT(&mock.ui_, KrShellUI, show_notification) &&
+            mock.ui_.show_notification)
+          mock.ui_.show_notification(
+              mock.ui_.self, Str("Local translation requested (preview)"));
+      } else if (action == kActionZoomReset) {
+        mock.page_zoom_percent_ = 100;
+        mock.PushActions();
       } else if (action == kActionCopyLink) {
         if (KR_HAS_SLOT(&mock.ui_, KrShellUI, show_notification) &&
             mock.ui_.show_notification)
@@ -712,6 +792,7 @@ void MockBrowser::PushSpaces() const {
   }
   ui_.set_spaces(ui_.self, spaces.data(), spaces.size(), sizeof(KrSpace),
                  active_space_);
+  PushSpaceProfiles();
 }
 
 void MockBrowser::PushNav() const {
@@ -739,6 +820,7 @@ void MockBrowser::PushActions() const {
   if (!attached_)
     return;
   const std::uint32_t on = KR_ACTION_VISIBLE | KR_ACTION_ENABLED;
+  const auto zoom = std::format("{}%", page_zoom_percent_);
   const std::array actions = {
       KrAction{.struct_size = sizeof(KrAction),
                .id = kActionBookmark,
@@ -767,6 +849,37 @@ void MockBrowser::PushActions() const {
                .tooltip = Str("Copy link"),
                .glyph = Str("\uE8C8"),
                .progress = -1},
+      KrAction{.struct_size = sizeof(KrAction),
+               .id = kActionDictation,
+               .kind = KR_ACTION_DICTATION,
+               .flags = on,
+               .label = Str("Voice typing"),
+               .tooltip = Str("Private local voice typing"),
+               .icon = 0,
+               .glyph = {},
+               .badge = {},
+               .badge_color = 0,
+               .progress = -1,
+               .badge_text_color = 0},
+      KrAction{.struct_size = sizeof(KrAction),
+               .id = kActionZoomReset,
+               .kind = KR_ACTION_ZOOM_RESET,
+               .flags = page_zoom_percent_ == 100 ? 0u : on,
+               .label = Str(zoom),
+               .tooltip = Str("Reset page zoom"),
+               .progress = -1},
+      KrAction{.struct_size = sizeof(KrAction),
+               .id = kActionTranslate,
+               .kind = KR_ACTION_TRANSLATE,
+               .flags = on,
+               .label = Str("Translate page"),
+               .tooltip = Str("Private local translation"),
+               .icon = 0,
+               .glyph = {},
+               .badge = {},
+               .badge_color = 0,
+               .progress = -1,
+               .badge_text_color = 0},
       KrAction{.struct_size = sizeof(KrAction),
                .id = kActionSiteData,
                .kind = KR_ACTION_SITE_TOOLS,
@@ -1261,8 +1374,8 @@ void MockBrowser::Suggest(std::uint32_t request_id, std::string_view text) {
     if (items.size() >= 6)
       break;
     if (Lower(tab.title).contains(needle) || Lower(tab.url).contains(needle)) {
-      add(KR_SUGGESTION_OPEN_TAB, 0, tab.title, "Switch to tab", tab.id,
-          tab.id);
+      add(KR_SUGGESTION_OPEN_TAB, KR_SUGGESTION_TAB_SWITCH, tab.title,
+          "Switch to Tab", tab.id, tab.id);
     }
   }
   for (std::string_view entry : kHistory) {

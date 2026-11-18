@@ -10,9 +10,7 @@ KryptonUI shapes how [Krypton](https://github.com/perpetus/Krypton) looks and
 feels on Windows: the sidebar, tabs, workspaces, address bar, menus and everyday
 controls.
 
-It brings workspace-oriented browsing ideas familiar to Arc and Zen Browser
-users into Krypton's Helium-based browser, with an interface designed to feel
-at home on Windows.
+The interface is built with native Windows controls.
 
 ## What it brings to Krypton
 
@@ -23,6 +21,9 @@ at home on Windows.
   media controls.
 - **A look that feels personal:** workspace themes, icon choices and site
   appearance controls through Boosts.
+
+The 0.22.1.1 browser release adds a five-preview tab switcher, more command
+bar actions, and model management in Settings → Languages.
 
 KryptonUI is part of Krypton and is actively developed alongside the browser.
 

@@ -25,12 +25,17 @@ inline void PlaceAddressActions(std::span<const ActionKind> kinds,
                                 std::size_t capacity,
                                 std::span<std::uint8_t> visible) noexcept {
   std::ranges::fill(visible, std::uint8_t{0});
-  capacity =
-      std::max(capacity, static_cast<std::size_t>(
-                             std::ranges::count(kinds, ActionKind::kSiteTools) +
-                             std::ranges::count(kinds, ActionKind::kCopyLink)));
+  capacity = std::max(capacity,
+                      static_cast<std::size_t>(
+                          std::ranges::count(kinds, ActionKind::kSiteTools) +
+                          std::ranges::count(kinds, ActionKind::kCopyLink) +
+                          std::ranges::count(kinds, ActionKind::kTranslate)));
   const auto priority = [](ActionKind kind) {
     if (kind == ActionKind::kSiteTools)
+      return -3;
+    if (kind == ActionKind::kTranslate)
+      return -2;
+    if (kind == ActionKind::kZoomReset)
       return -1;
     if (kind == ActionKind::kCopyLink)
       return 0;
@@ -39,7 +44,7 @@ inline void PlaceAddressActions(std::span<const ActionKind> kinds,
                                             : 2;
   };
   std::size_t placed = 0;
-  for (int rank = -1; rank != 3 && placed < capacity; ++rank)
+  for (int rank = -3; rank != 3 && placed < capacity; ++rank)
     for (std::size_t i = 0;
          i < std::min(kinds.size(), visible.size()) && placed < capacity; ++i)
       if (priority(kinds[i]) == rank) {

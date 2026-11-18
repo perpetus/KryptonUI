@@ -26,6 +26,7 @@ class IslandHide {
   // bounds.
   void BeforeShow();
   [[nodiscard]] bool IsParked() const noexcept { return parked_; }
+  [[nodiscard]] bool IsPending() const noexcept { return queued_; }
 
  private:
   std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);

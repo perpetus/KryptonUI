@@ -88,6 +88,9 @@ class BrowserPort {
   void ActivateTab(TabId tab) const;
   void CloseTab(TabId tab) const;
   void SetTabFlags(TabId tab, Flags<TabFlag> mask, Flags<TabFlag> values) const;
+  void RequestTabSwitcherPreviews(std::uint32_t request,
+                                  std::span<const TabId> tabs) const;
+  void CancelTabSwitcherPreviews(std::uint32_t request) const;
   void RequestTabPreview(std::uint32_t request_id, TabId tab) const;
   void CancelTabPreview(std::uint32_t request_id) const;
   [[nodiscard]] bool CanEditTheme() const noexcept;
@@ -105,6 +108,9 @@ class BrowserPort {
   void SendNavCommand(kr::NavCommand command) const;
   void QuerySuggestions(std::uint32_t request_id, std::string_view text) const;
   void CancelSuggestions(std::uint32_t request_id) const;
+  [[nodiscard]] bool CanDictate() const noexcept;
+  void StartDictation(std::uint32_t request) const;
+  void StopDictation(std::uint32_t request) const;
   void AddressStateChanged(Flags<AddressFlag> flags,
                            std::uint32_t request_id,
                            std::string_view text,
@@ -127,6 +133,13 @@ class BrowserPort {
   [[nodiscard]] bool SaveRoutingRule(const RoutingDraft& value) const;
   void SetTabIcon(TabId tab, std::string_view glyph) const;
   void EditWorkspace(WorkspaceEditKind kind, const Space& space) const;
+  [[nodiscard]] bool CanSetSpaceProfiles() const noexcept;
+  void SetSpaceProfile(SpaceId space,
+                       ProfileId profile,
+                       std::string_view new_profile) const;
+  void CreateSpace(const Space& space,
+                   ProfileId profile,
+                   std::string_view new_profile) const;
   void SetShellMetrics(float width, float height) const;
   void SetWindowBackdrop(const ThemeVm& theme) const;
   void AcceptSuggestion(std::uint32_t request_id,
@@ -148,6 +161,9 @@ class BrowserPort {
   void SetDragRegions(std::span<const Rect> regions) const;
   void SetLayoutPrefs(const LayoutPrefs& prefs) const;
   void SettingsVisibilityChanged(SettingsSection section, bool visible) const;
+  [[nodiscard]] bool ManageLocalModel(LocalModelKind kind,
+                                      std::uint32_t id,
+                                      LocalModelCommand command) const;
   [[nodiscard]] bool CanSwitchWorkspaces() const noexcept;
   [[nodiscard]] bool CanEditSettings() const noexcept;
   [[nodiscard]] bool CanInvokeSettings() const noexcept;

@@ -63,6 +63,43 @@ class ContentFade {
   bool started_ = false;
 };
 
+// One finite clockwise sweep of soft gradient light around a rounded inner
+// edge (overlay.shimmer* tokens), drawn like the address loading light: three
+// staggered color waves, each a long, shallow eased falloff hugging the edge
+// its head is on, never hard-edged segments. The host is a
+// non-hit-testable element covering that edge; nothing is created until the
+// first sweep. Geometry follows the host's composition size through
+// expressions. At rest it is transparent and no animation runs, so it needs
+// no completion callback or timer.
+class EdgeShimmer {
+ public:
+  EdgeShimmer() = default;
+  ~EdgeShimmer();
+  EdgeShimmer(const EdgeShimmer&) = delete;
+  EdgeShimmer& operator=(const EdgeShimmer&) = delete;
+  void Attach(const xaml::FrameworkElement& host) { host_ = host; }
+  // `radius` is the host's own corner radius.
+  void Play(float radius,
+            const NativeMotion& motion,
+            bool high_contrast) noexcept;
+  void Stop() noexcept;
+
+ private:
+  void Ensure();
+  xaml::FrameworkElement host_{nullptr};
+  winrt::Microsoft::UI::Composition::ContainerVisual visual_{nullptr};
+  winrt::Microsoft::UI::Composition::RectangleClip clip_{nullptr};
+  winrt::Microsoft::UI::Composition::CompositionRoundedRectangleGeometry ring_{
+      nullptr};
+  // Progress in turns swept; the head position derives from it.
+  winrt::Microsoft::UI::Composition::CompositionPropertySet metrics_{nullptr};
+  winrt::Microsoft::UI::Composition::CompositionPropertySet path_{nullptr};
+  winrt::Microsoft::UI::Composition::CompositionPropertySet frame_{nullptr};
+  winrt::Microsoft::UI::Composition::ScalarKeyFrameAnimation sweep_{nullptr};
+  winrt::Microsoft::UI::Composition::ScalarKeyFrameAnimation fade_{nullptr};
+  bool started_ = false;
+};
+
 // Shared compositor helpers. Callers check NativeMotion::Enabled first and
 // apply the final state directly when motion is off.
 [[nodiscard]] std::chrono::milliseconds Ms(float milliseconds) noexcept;

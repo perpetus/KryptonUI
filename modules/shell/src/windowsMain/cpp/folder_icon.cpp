@@ -12,6 +12,8 @@
 
 #include <numbers>
 
+#include "krypton/ui/model/folder.hpp"
+
 namespace kr::win {
 namespace composition = winrt::Microsoft::UI::Composition;
 namespace shapes = xaml::Shapes;
@@ -28,7 +30,9 @@ constexpr std::wstring_view kFolder =
   <Canvas x:Name="Front">
     <Rectangle x:Name="FrontFill" Canvas.Left="5.625" Canvas.Top="9.625" Width="16.75" Height="12.75" RadiusX="2.375" RadiusY="2.375"/>
     <Rectangle x:Name="FrontShade" Canvas.Left="5.625" Canvas.Top="9.625" Width="16.75" Height="12.75" RadiusX="2.375" RadiusY="2.375"/>
-    <TextBlock x:Name="Emblem" Canvas.Left="8.5" Canvas.Top="10.5" TextAlignment="Center"/>
+    <Grid x:Name="Emblem" Canvas.Left="8.5" Canvas.Top="10.5">
+      <TextBlock x:Name="Glyph" TextAlignment="Center"/>
+    </Grid>
     <Canvas x:Name="Dots">
       <Ellipse Canvas.Left="8.75" Canvas.Top="14.75" Width="2.5" Height="2.5"/>
       <Ellipse Canvas.Left="12.75" Canvas.Top="14.75" Width="2.5" Height="2.5"/>
@@ -50,7 +54,10 @@ FolderIcon::FolderIcon() {
   root_.Child(canvas_);
   back_ = canvas_.FindName(L"Back").as<controls::Canvas>();
   front_ = canvas_.FindName(L"Front").as<controls::Canvas>();
-  emblem_ = canvas_.FindName(L"Emblem").as<controls::TextBlock>();
+  emblem_host_ = canvas_.FindName(L"Emblem").as<controls::Grid>();
+  emblem_host_.Width(t.glyph_size);
+  emblem_host_.Height(t.glyph_size);
+  emblem_ = canvas_.FindName(L"Glyph").as<controls::TextBlock>();
   emblem_.FontFamily(
       xaml::Media::FontFamily(winrt::to_hstring(kTokens.type.family)));
   emblem_.FontSize(t.glyph_size);
@@ -62,7 +69,7 @@ FolderIcon::FolderIcon() {
   front_visual_ =
       xaml::Hosting::ElementCompositionPreview::GetElementVisual(front_);
   emblem_visual_ =
-      xaml::Hosting::ElementCompositionPreview::GetElementVisual(emblem_);
+      xaml::Hosting::ElementCompositionPreview::GetElementVisual(emblem_host_);
   dots_visual_ =
       xaml::Hosting::ElementCompositionPreview::GetElementVisual(dots_);
   const auto compositor = back_visual_.Compositor();
@@ -121,7 +128,40 @@ void FolderIcon::Update(bool open,
                         const ThemeVm& theme,
                         Brushes& brushes,
                         const NativeMotion& motion,
-                        bool animate) {
+                        bool animate,
+                        unsigned live_kind) {
+  // Zen keeps its animated folder layers; provider artwork is an 11px emblem
+  // on the front, sharing the existing open/close and active-dots animations.
+  const auto provider =
+      !glyph.empty() || !live_kind                                ? 0u
+      : live_kind == std::to_underlying(LiveFolderProvider::kRss) ? 1u
+                                                                  : 2u;
+  if (provider_kind_ != provider) {
+    if (provider_icon_) {
+      std::uint32_t index = 0;
+      if (emblem_host_.Children().IndexOf(provider_icon_, index))
+        emblem_host_.Children().RemoveAt(index);
+      provider_icon_ = nullptr;
+    }
+    provider_kind_ = provider;
+    if (provider) {
+      provider_icon_ =
+          SourceIcon(brushes.text, provider == 1u ? design::icons::kLogoRss
+                                                  : design::icons::kLogoGithub);
+      provider_icon_.Width(kTokens.folder.glyph_size);
+      provider_icon_.Height(kTokens.folder.glyph_size);
+      emblem_host_.Children().Append(provider_icon_);
+    }
+    emblem_.Visibility(provider ? xaml::Visibility::Collapsed
+                                : xaml::Visibility::Visible);
+  }
+  if (provider_icon_)
+    provider_icon_.Child()
+        .as<controls::Canvas>()
+        .Children()
+        .GetAt(0)
+        .as<shapes::Path>()
+        .Fill(brushes.text);
   const auto& t = kTokens.folder;
   const bool contrast = brushes.high_contrast();
   if (!theme_ready_ || dark_ != theme.dark || contrast_ != contrast ||

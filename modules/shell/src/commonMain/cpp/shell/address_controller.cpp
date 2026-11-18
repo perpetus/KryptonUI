@@ -7,6 +7,11 @@
 
 namespace kr {
 bool Shell::OnAddressKey(AddressKey key, Flags<AddressModifier> modifiers) {
+  if (dictation_request_ && key == AddressKey::kEscape &&
+      !store_.ui().command_bar.selection.composing) {
+    StopDictation();
+    return true;
+  }
   if (!store_.ui().command_bar.open ||
       store_.ui().command_bar.selection.composing ||
       RouteAddressKey(key, modifiers) != AddressKeyRoute::kAddress)
@@ -29,6 +34,7 @@ Result<void> Shell::SetSuggestionSelection(std::uint32_t request,
   return {};
 }
 void Shell::NotifyAddressState() {
+  store_.SetCommandLauncher(command_opens_new_tab_);
   const auto& bar = store_.ui().command_bar;
   Flags<AddressFlag> flags;
   flags.Set(AddressFlag::kOpen, bar.open)
@@ -45,6 +51,7 @@ void Shell::CancelAddressQuery() {
 }
 
 void Shell::CloseAddress() {
+  StopDictation();
   if (!store_.ui().command_bar.open)
     return;
   const auto request = store_.ui().command_bar.request_id;

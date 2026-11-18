@@ -20,6 +20,7 @@
 #include "krypton/ui/model/onboarding.hpp"
 #include "krypton/ui/model/privacy_features.hpp"
 #include "krypton/ui/model/settings.hpp"
+#include "krypton/ui/model/tab_switcher.hpp"
 #include "krypton/ui/model/ui_text.hpp"
 #include "krypton/ui/model/workspace_editor.hpp"
 #include "krypton/ui/model/workspace_swipe.hpp"
@@ -51,7 +52,8 @@ enum class Dirty : std::uint32_t {
   kLibrary = 1u << 18,
   kOnboarding = 1u << 19,
   kMultiPage = 1u << 20,
-  kAll = (1u << 21) - 1,
+  kTabSwitcher = 1u << 21,
+  kAll = (1u << 22) - 1,
 };
 template <>
 inline constexpr bool kIsFlagEnum<Dirty> = true;
@@ -61,6 +63,7 @@ inline constexpr bool kIsFlagEnum<Dirty> = true;
 struct CommandBarState {
   bool open = false;
   bool pointer_open = false, typed = false;
+  bool launcher = false;
   std::string text;
   bool select_all = false;
   AddressSelection selection;
@@ -107,6 +110,7 @@ struct UiState {
   bool address_focused = false;
   ThemeEditorState theme_editor;
   TabPreviewState tab_preview;
+  TabSwitcherState tab_switcher;
   NativeTitleBarMetrics native_titlebar;
   WorkspaceSwipeState workspace_swipe;
   CommandBarState command_bar;
@@ -165,6 +169,8 @@ class Store {
   [[nodiscard]] Result<void> SetActiveTab(TabId id);
 
   void SetSpaces(std::vector<Space> spaces, SpaceId active);
+  void SetSpaceProfiles(std::vector<ProfileChoice> choices,
+                        std::vector<SpaceProfile> spaces);
   void SetNav(NavState nav);
   [[nodiscard]] Result<void> SetLoadProgress(const LoadProgressUpdate& update);
   void SetAddressFocused(bool focused);
@@ -226,6 +232,7 @@ class Store {
   void SetCommandSelectAll(bool value) { ui_.command_bar.select_all = value; }
   void SetCommandPointerOrigin();
   void MarkCommandTyped();
+  void SetCommandLauncher(bool value);
   void SetCommandEdit(std::string text,
                       AddressSelection selection,
                       bool native);
@@ -237,6 +244,13 @@ class Store {
   void SetCommandSelection(std::size_t index);
   void SetSidebarRevealed(bool revealed);
   void SetToolbarRevealed(bool revealed);
+  void OpenTabSwitcher(std::vector<TabId> tabs, std::size_t selected);
+  void MoveTabSwitcher(int delta);
+  void CloseTabSwitcher();
+  void BeginTabSwitcherPage(std::uint32_t request);
+  [[nodiscard]] bool SetTabSwitcherPreview(std::uint32_t request,
+                                           TabId tab,
+                                           const TabPreviewData& data);
   void BeginTabPreview(TabId tab, std::uint32_t request_id);
   void EndTabPreview();
   [[nodiscard]] bool SetTabPreview(std::uint32_t request_id,
@@ -251,6 +265,10 @@ class Store {
   [[nodiscard]] std::span<const Space> spaces() const { return spaces_; }
   [[nodiscard]] SpaceId active_space() const { return active_space_; }
   [[nodiscard]] const Space* FindSpace(SpaceId id) const;
+  [[nodiscard]] std::span<const ProfileChoice> profile_choices() const {
+    return profile_choices_;
+  }
+  [[nodiscard]] const SpaceProfile* FindSpaceProfile(SpaceId id) const;
   [[nodiscard]] const NavState& nav() const { return nav_; }
   [[nodiscard]] const LoadingProgressState& loading_progress() const noexcept {
     return loading_.state();
@@ -307,6 +325,13 @@ class Store {
     MarkDirty(Dirty::kSettings | Dirty::kOnboarding);
     return services_;
   }
+  [[nodiscard]] const LocalModelsState& local_models() const noexcept {
+    return local_models_;
+  }
+  void SetLocalModels(LocalModelsState value) {
+    local_models_ = std::move(value);
+    MarkDirty(Dirty::kSettings);
+  }
   [[nodiscard]] const BrowserSettingsState& browser_settings() const noexcept {
     return browser_settings_;
   }
@@ -338,6 +363,8 @@ class Store {
   std::unordered_map<TabId, std::size_t> index_;
   TabId active_tab_;
   std::vector<Space> spaces_;
+  std::vector<ProfileChoice> profile_choices_;
+  std::vector<SpaceProfile> space_profiles_;
   SpaceId active_space_;
   NavState nav_;
   LoadingProgress loading_;
@@ -352,6 +379,7 @@ class Store {
   LibraryState library_;
   OnboardingState onboarding_;
   BrowserSettingsState browser_settings_;
+  LocalModelsState local_models_;
   BrowserServicesState services_;
   std::array<std::string, kUiTextDefaults.size()> text_;
   bool right_to_left_ = false;

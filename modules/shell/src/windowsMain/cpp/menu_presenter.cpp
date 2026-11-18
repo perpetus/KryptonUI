@@ -135,6 +135,9 @@ MenuPresenter::MenuPresenter(HWND parent, ViewContext& context, Task on_closed)
 bool MenuPresenter::IsOpen() const noexcept {
   return menu_open_ || (app_menu_ && app_menu_->IsOpen());
 }
+bool MenuPresenter::OwnsInput() const noexcept {
+  return menu_open_ || (app_menu_ && app_menu_->OwnsInput());
+}
 bool MenuPresenter::Contains(Point point) const noexcept try {
   if (app_menu_ && app_menu_->IsOpen())
     return app_menu_->Contains(point);
@@ -298,7 +301,7 @@ void MenuPresenter::Show(std::uint32_t request,
     kind_ = kind;
     app_menu_->Show(request, tree, anchor, images, viewport, scale,
                     owner.RequestedTheme(), owner.FlowDirection(),
-                    kind == MenuKind::kSecurity);
+                    kind == MenuKind::kSecurity, kind == MenuKind::kAction);
     return;
   }
   if (menu_open_ && menu_ && menu_request_ == request) {

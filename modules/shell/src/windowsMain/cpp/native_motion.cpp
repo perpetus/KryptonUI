@@ -1,11 +1,17 @@
 #include "native_motion.hpp"
 
 #include <winrt/Microsoft.UI.Xaml.Hosting.h>
+#include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <initializer_list>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -119,6 +125,238 @@ void ContentFade::Play(const xaml::UIElement& target,
     Stop();
     platform::WriteDefaultLog(LogLevel::kWarning,
                               "Content fade could not start");
+  }
+}
+
+EdgeShimmer::~EdgeShimmer() {
+  Stop();
+  try {
+    if (visual_ && host_)
+      xaml::Hosting::ElementCompositionPreview::SetElementChildVisual(host_,
+                                                                      nullptr);
+  } catch (...) {
+    // A closed native island may already have released its composition tree.
+  }
+}
+
+void EdgeShimmer::Ensure() {
+  if (visual_)
+    return;
+  constexpr auto& t = kTokens.overlay;
+  static_assert(t.shimmer_falloff_positions.size() ==
+                t.shimmer_falloff_opacity.size());
+  // Built locally and committed together: a failure leaves nothing partial.
+  const auto host =
+      xaml::Hosting::ElementCompositionPreview::GetElementVisual(host_);
+  const auto compositor = host.Compositor();
+  auto metrics = compositor.CreatePropertySet();
+  metrics.InsertScalar(L"Progress", 0);
+  // Distance<i> along the edge per wave; Head<i> and Vertical<i> derive from
+  // it in a separate set, so no expression reads its own target.
+  auto path = compositor.CreatePropertySet();
+  auto frame = compositor.CreatePropertySet();
+  struct Reference {
+    const wchar_t* name;
+    composition::CompositionObject object;
+  };
+  struct Scalar {
+    const wchar_t* name;
+    float value;
+  };
+  const auto bind = [&](const composition::CompositionObject& target,
+                        std::wstring_view property, const std::wstring& text,
+                        std::initializer_list<Reference> references,
+                        std::initializer_list<Scalar> scalars = {}) {
+    auto expression =
+        compositor.CreateExpressionAnimation(winrt::hstring{text});
+    for (const auto& reference : references)
+      expression.SetReferenceParameter(reference.name, reference.object);
+    for (const auto& scalar : scalars)
+      expression.SetScalarParameter(scalar.name, scalar.value);
+    target.StartAnimation(winrt::hstring{property}, expression);
+  };
+  // Distances run clockwise in DIPs from the top-left corner and stay within
+  // two laps, so positions are plain clamped segments for each lap. The top
+  // edge ends at W, the right at W + H, the bottom at 2W + H, the left at a
+  // full lap; corners are followed square, which the soft light hides.
+  const std::wstring w = L"host.Size.X", h = L"host.Size.Y";
+  const std::wstring lap = L"(2 * (" + w + L" + " + h + L"))";
+  const std::array<std::wstring, 4> ends{w, L"(" + w + L" + " + h + L")",
+                                         L"(2 * " + w + L" + " + h + L")", lap};
+  const auto segment = [](const std::wstring& base, const std::wstring& extent,
+                          const std::wstring& start, const std::wstring& end) {
+    return L"Clamp(" + base + L" - " + start + L", 0, " + extent +
+           L") - Clamp(" + base + L" - " + end + L", 0, " + extent + L")";
+  };
+  // 0 to 1 across [at - Blend, at + Blend].
+  const auto ramp = [](const std::wstring& base, const std::wstring& at) {
+    return L"Clamp((" + base + L" - " + at + L") / (2 * Blend) + 0.5, 0, 1)";
+  };
+  auto visual = compositor.CreateContainerVisual();
+  // The parent XAML gives a child visual need not have a size, so the root
+  // follows the element's own composition size; the layers fill the root.
+  bind(visual, L"Size", L"host.Size", {{L"host", host}});
+  visual.Opacity(0);
+  // Sheens inside the rounded edge. Clip corner radii cannot be animated;
+  // Play sets them with the ring's.
+  auto glows = compositor.CreateContainerVisual();
+  glows.RelativeSizeAdjustment({1, 1});
+  auto clip = compositor.CreateRectangleClip();
+  bind(clip, L"Right", w, {{L"host", host}});
+  bind(clip, L"Bottom", h, {{L"host", host}});
+  glows.Clip(clip);
+  // The edge line, one stroke per wave over the same rounded path.
+  const float inset = t.shimmer_line_width / 2;
+  auto ring = compositor.CreateRoundedRectangleGeometry();
+  ring.Offset({inset, inset});
+  bind(ring, L"Size",
+       L"Vector2(Max(0, " + w + L" - 2 * Inset), Max(0, " + h +
+           L" - 2 * Inset))",
+       {{L"host", host}}, {{L"Inset", inset}});
+  auto line = compositor.CreateShapeVisual();
+  line.RelativeSizeAdjustment({1, 1});
+  // Leading wave on top: build from the last (trailing) wave forward.
+  for (std::size_t wave = t.shimmer_wave_colors.size(); wave-- > 0;) {
+    const std::wstring n = std::to_wstring(wave);
+    const std::wstring distance = L"Distance" + n;
+    path.InsertScalar(winrt::hstring{distance}, 0);
+    bind(path, distance,
+         w + L" + " + h + L" / 2 + (Lead + m.Progress) * " + lap,
+         {{L"host", host}, {L"m", metrics}},
+         {{L"Lead", t.shimmer_start_offset -
+                        t.shimmer_wave_gap * static_cast<float>(wave)}});
+    const std::wstring s = L"p." + distance;
+    const std::wstring next = L"(" + s + L" - " + lap + L")";
+    frame.InsertVector2(winrt::hstring{L"Head" + n}, {0, 0});
+    bind(frame, L"Head" + n,
+         L"Vector2(" + segment(s, w, L"0", ends[1]) + L" + " +
+             segment(next, w, L"0", ends[1]) + L", " +
+             segment(s, h, ends[0], ends[2]) + L" + " +
+             segment(next, h, ends[0], ends[2]) + L")",
+         {{L"host", host}, {L"p", path}});
+    // 1 along the right and left edges, 0 along the top and bottom.
+    std::wstring vertical;
+    for (const auto& base : {s, next})
+      vertical += (vertical.empty() ? L"" : L" + ") + ramp(base, ends[0]) +
+                  L" - " + ramp(base, ends[1]) + L" + " + ramp(base, ends[2]) +
+                  L" - " + ramp(base, ends[3]);
+    frame.InsertScalar(winrt::hstring{L"Vertical" + n}, 0);
+    bind(frame, L"Vertical" + n, vertical, {{L"host", host}, {L"p", path}},
+         {{L"Blend", t.shimmer_corner_blend}});
+    // A long, shallow sheen along the edge the head is on, turning with it
+    // at corners, with an eased falloff so no ring or band edge shows.
+    const auto sheen = [&](float opacity, float along, float across) {
+      auto brush = compositor.CreateRadialGradientBrush();
+      brush.MappingMode(composition::CompositionMappingMode::Absolute);
+      brush.GradientOriginOffset({0, 0});
+      const Color color{t.shimmer_wave_colors[wave]};
+      for (std::size_t i = 0; i < t.shimmer_falloff_positions.size(); ++i)
+        brush.ColorStops().Append(compositor.CreateColorGradientStop(
+            t.shimmer_falloff_positions[i],
+            NativeColor(color.WithAlpha(static_cast<std::uint8_t>(
+                std::lround(static_cast<float>(color.a()) * opacity *
+                            t.shimmer_falloff_opacity[i]))))));
+      const std::wstring v = L"f.Vertical" + n;
+      const std::wstring reach = L"Min(" + w + L" * Share, Along)";
+      bind(brush, L"EllipseCenter", L"f.Head" + n, {{L"f", frame}});
+      bind(brush, L"EllipseRadius",
+           L"Vector2(" + reach + L" * (1 - " + v + L") + Across * " + v +
+               L", " + reach + L" * " + v + L" + Across * (1 - " + v + L"))",
+           {{L"host", host}, {L"f", frame}},
+           {{L"Share", t.shimmer_share},
+            {L"Along", along},
+            {L"Across", across}});
+      return brush;
+    };
+    auto glow = compositor.CreateSpriteVisual();
+    glow.RelativeSizeAdjustment({1, 1});
+    glow.Brush(sheen(t.shimmer_glow_opacity, t.shimmer_glow_along,
+                     t.shimmer_glow_across));
+    glows.Children().InsertAtTop(glow);
+    auto stroke = compositor.CreateSpriteShape(ring);
+    stroke.StrokeThickness(t.shimmer_line_width);
+    stroke.StrokeBrush(sheen(1, t.shimmer_line_along, t.shimmer_line_across));
+    line.Shapes().Append(stroke);
+  }
+  visual.Children().InsertAtTop(glows);
+  visual.Children().InsertAtTop(line);
+
+  const float duration = t.shimmer_duration_ms;
+  const auto at = [duration](float milliseconds) {
+    return std::clamp(milliseconds / duration, 0.0f, 1.0f);
+  };
+  const auto ease_in = Bezier(compositor, t.shimmer_ease_in);
+  const auto ease_out = Bezier(compositor, t.shimmer_ease_out);
+  auto sweep = compositor.CreateScalarKeyFrameAnimation();
+  sweep.InsertKeyFrame(0, 0);
+  sweep.InsertKeyFrame(at(t.shimmer_midpoint_ms), t.shimmer_turn / 2, ease_in);
+  sweep.InsertKeyFrame(at(t.shimmer_sweep_ms), t.shimmer_turn, ease_out);
+  sweep.InsertKeyFrame(1, t.shimmer_turn);
+  sweep.Duration(Ms(duration));
+  auto fade = compositor.CreateScalarKeyFrameAnimation();
+  fade.InsertKeyFrame(0, 0);
+  fade.InsertKeyFrame(at(t.shimmer_fade_in_ms), 1, ease_out);
+  fade.InsertKeyFrame(at(t.shimmer_fade_out_start_ms), 1);
+  fade.InsertKeyFrame(1, 0, ease_in);
+  fade.Duration(Ms(duration));
+  fade.StopBehavior(composition::AnimationStopBehavior::SetToFinalValue);
+  xaml::Hosting::ElementCompositionPreview::SetElementChildVisual(host_,
+                                                                  visual);
+  visual_ = std::move(visual);
+  clip_ = std::move(clip);
+  ring_ = std::move(ring);
+  metrics_ = std::move(metrics);
+  path_ = std::move(path);
+  frame_ = std::move(frame);
+  sweep_ = std::move(sweep);
+  fade_ = std::move(fade);
+}
+
+void EdgeShimmer::Play(float radius,
+                       const NativeMotion& motion,
+                       bool high_contrast) noexcept {
+  Stop();
+  if (!host_ || !motion.Enabled(high_contrast) ||
+      !(kTokens.overlay.shimmer_duration_ms > 0))
+    return;
+  try {
+    Ensure();
+    // Corner radii are small next to the bar, so no size clamp is needed.
+    const float outer = std::max(0.0f, radius);
+    const float inner =
+        std::max(0.0f, outer - kTokens.overlay.shimmer_line_width / 2);
+    clip_.TopLeftRadius({outer, outer});
+    clip_.TopRightRadius({outer, outer});
+    clip_.BottomLeftRadius({outer, outer});
+    clip_.BottomRightRadius({outer, outer});
+    ring_.CornerRadius({inner, inner});
+    started_ = true;
+    metrics_.StartAnimation(L"Progress", sweep_);
+    visual_.StartAnimation(L"Opacity", fade_);
+  } catch (const winrt::hresult_error& error) {
+    Stop();
+    std::array<char, 256> message{};
+    std::snprintf(message.data(), message.size(),
+                  "Edge shimmer could not start: 0x%08X %s",
+                  static_cast<unsigned int>(error.code().value),
+                  winrt::to_string(error.message()).c_str());
+    platform::WriteDefaultLog(LogLevel::kWarning, message.data());
+  } catch (...) {
+    Stop();
+    platform::WriteDefaultLog(LogLevel::kWarning,
+                              "Edge shimmer could not start");
+  }
+}
+
+void EdgeShimmer::Stop() noexcept {
+  if (!std::exchange(started_, false))
+    return;
+  try {
+    metrics_.StopAnimation(L"Progress");
+    visual_.StopAnimation(L"Opacity");
+    visual_.Opacity(0);
+  } catch (...) {
+    // A closed native island may already have released its composition tree.
   }
 }
 

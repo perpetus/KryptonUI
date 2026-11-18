@@ -109,15 +109,45 @@ const ShellViewModel& Presenter::Present(const Store& store,
   vm_.theme = PresentTheme(store);
   if (new_source || changed.HasAny(Dirty::kSpaces | Dirty::kTheme))
     PresentSpaces(store);
-  if (new_source || changed.HasAny(Dirty::kCommandBar | Dirty::kTheme))
+  if (new_source ||
+      changed.HasAny(Dirty::kCommandBar | Dirty::kTheme | Dirty::kActions))
     PresentCommandBar(store);
   PresentTabPreview(store);
+  if (new_source || changed.HasAny(Dirty::kTabSwitcher | Dirty::kTabs |
+                                   Dirty::kTheme | Dirty::kSettings)) {
+    auto& vm = vm_.tab_switcher;
+    const auto& state = store.ui().tab_switcher;
+    vm = {};
+    vm.open = state.open;
+    vm.awake_only =
+        store.appearance_prefs().flags.Has(AppearanceFlag::kSwitcherAwakeOnly);
+    if (state.open) {
+      vm.total = state.tabs.size();
+      vm.first = state.selected / kTabSwitcherPageSize * kTabSwitcherPageSize;
+      vm.selected = state.selected - vm.first;
+      vm.count = std::min(kTabSwitcherPageSize, vm.total - vm.first);
+      for (std::size_t i = 0; i < vm.count; ++i) {
+        if (const auto* tab = store.FindTab(state.tabs[vm.first + i]))
+          vm.items[i] = {tab->id, tab->title, tab->favicon,
+                         state.previews[i].thumbnail,
+                         tab->flags.Has(TabFlag::kSleeping)};
+      }
+    }
+  }
   vm_.boost_editor = &store.ui().boost_editor;
   const auto& workspace = store.ui().workspace_editor;
   vm_.workspace_editor = {workspace.open,       workspace.can_remove,
                           workspace.serial,     workspace.value.id,
                           workspace.value.name, workspace.value.glyph,
                           workspace.icon_tab};
+  if (!workspace.icon_tab) {
+    vm_.workspace_editor.profiles = store.profile_choices();
+    if (const auto* profile = store.FindSpaceProfile(workspace.value.id)) {
+      vm_.workspace_editor.profile = profile->profile;
+      vm_.workspace_editor.profile_status = profile->status;
+      vm_.workspace_editor.profile_locked = profile->in_use;
+    }
+  }
   const auto& editor = store.ui().theme_editor;
   const auto* editor_space = store.FindSpace(editor.space);
   std::size_t first = 0, count = 0;
@@ -152,6 +182,7 @@ const ShellViewModel& Presenter::Present(const Store& store,
     PresentSettings(store);
   vm_.settings = {.entries = settings_entries_,
                   .browser = &store.browser_settings(),
+                  .local_models = &store.local_models(),
                   .services = &store.browser_services(),
                   .workspaces = store.spaces(),
                   .active_workspace = store.active_space(),
@@ -376,20 +407,39 @@ void Presenter::PresentActions(const Store& store) {
                action.flags.Has(ActionFlag::kVisible);
       });
   for (const Action& action : store.actions()) {
-    if (!action.flags.Has(ActionFlag::kVisible))
+    if (!action.flags.Has(ActionFlag::kVisible) ||
+        action.kind == ActionKind::kDictation)
       continue;
     const bool in_address_pill = action.kind == ActionKind::kSiteTools ||
                                  action.kind == ActionKind::kPage ||
                                  action.kind == ActionKind::kSiteSetting ||
                                  action.kind == ActionKind::kExtension ||
-                                 action.kind == ActionKind::kCopyLink;
+                                 action.kind == ActionKind::kCopyLink ||
+                                 action.kind == ActionKind::kTranslate ||
+                                 action.kind == ActionKind::kZoomReset;
     if (consolidate && in_address_pill &&
         action.kind != ActionKind::kSiteTools &&
         action.kind != ActionKind::kExtension &&
-        action.kind != ActionKind::kCopyLink)
+        action.kind != ActionKind::kCopyLink &&
+        action.kind != ActionKind::kTranslate &&
+        action.kind != ActionKind::kZoomReset)
       continue;
-    (in_address_pill ? page_actions_ : toolbar_actions_)
-        .push_back(ToActionItem(action));
+    auto item = ToActionItem(action);
+    if (action.kind == ActionKind::kTranslate)
+      item.glyph = design::kTokens.translation.glyph;
+    (in_address_pill ? page_actions_ : toolbar_actions_).push_back(item);
+  }
+  const auto translation =
+      std::ranges::find(page_actions_, ActionKind::kTranslate,
+                        [](const auto& item) { return item.kind; });
+  const auto tools =
+      std::ranges::find(page_actions_, ActionKind::kSiteTools,
+                        [](const auto& item) { return item.kind; });
+  if (translation != page_actions_.end() && tools != page_actions_.end()) {
+    if (translation < tools)
+      std::rotate(translation, translation + 1, tools);
+    else if (translation > tools)
+      std::rotate(tools, translation, translation + 1);
   }
 }
 
@@ -411,7 +461,6 @@ void Presenter::PresentSpaces(const Store& store) {
 
 void Presenter::PresentCommandBar(const Store& store) {
   const CommandBarState& bar = store.ui().command_bar;
-  const auto behavior = SelectedSearchBarBehavior(store.appearance_prefs());
   suggestions_.clear();
   for (const Suggestion& s : bar.suggestions) {
     suggestions_.push_back({
@@ -420,15 +469,14 @@ void Presenter::PresentCommandBar(const Store& store) {
         .description = s.description,
         .icon = s.icon,
         .rich_image = s.rich_image,
+        .tab_switch = s.tab_switch,
         .contents_class = s.contents_class,
         .description_class = s.description_class,
     });
   }
   vm_.command_bar = {
       .open = bar.open,
-      .floating = behavior == SearchBarBehavior::kAlwaysFloating ||
-                  (behavior == SearchBarBehavior::kFloatingOnType &&
-                   (!bar.pointer_open || bar.typed)),
+      .floating = bar.launcher,
       .menu_backdrop = store.appearance_prefs().flags.Has(
           AppearanceFlag::kSearchBarMenuBackdrop),
       .text = bar.text,
@@ -439,6 +487,18 @@ void Presenter::PresentCommandBar(const Store& store) {
       .suggestions = suggestions_,
       .selected = bar.selected,
   };
+  if (bar.open && store.ui().address_focused && !bar.selection.composing) {
+    const auto microphone =
+        std::ranges::find_if(store.actions(), [](const Action& action) {
+          return action.kind == ActionKind::kDictation &&
+                 action.flags.Has(ActionFlag::kVisible);
+        });
+    if (microphone != store.actions().end()) {
+      auto action = ToActionItem(*microphone);
+      action.glyph = design::kTokens.dictation.glyph;
+      vm_.command_bar.microphone = action;
+    }
+  }
 }
 
 void Presenter::PresentTabPreview(const Store& store) {
@@ -486,7 +546,7 @@ void Presenter::PresentTabPreview(const Store& store) {
     if (!shown)
       return;
     if (!preview_status_.empty())
-      preview_status_.append(" · ");
+      preview_status_.append(" Ã‚Â· ");
     preview_status_.append(text[key]);
   };
   add(flags.Has(TabPreviewFlag::kSample), UiText::kPreviewSample);

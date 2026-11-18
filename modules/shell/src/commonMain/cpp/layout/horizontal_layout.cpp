@@ -128,10 +128,10 @@ ShellLayout ComputeHorizontalLayout(const WindowState& window,
       window.flags.HasAny(WindowFlag::kFullscreen | WindowFlag::kTabFullscreen))
     return result;
 
-  const bool rounded = !prefs.flags.Has(LayoutFlag::kSquareFrame);
-  const float margin = rounded ? std::min({tokens.spacing.window_margin,
-                                           client.width / 2, client.height / 2})
-                               : 0;
+  const bool inset = !prefs.flags.Has(LayoutFlag::kSquareFrame);
+  const float margin = inset ? std::min({tokens.spacing.window_margin,
+                                         client.width / 2, client.height / 2})
+                             : 0;
   const float caption =
       titlebar.enabled ? std::clamp(titlebar.height, 0.0f, client.height) : 0;
   const float tab_height =
@@ -170,7 +170,7 @@ ShellLayout ComputeHorizontalLayout(const WindowState& window,
                     result.toolbar_visible
                         ? height
                         : std::min(tokens.sidebar.reveal_width, client.height)};
-  PlaceCompactSurfaces(result, client, !rounded, tokens);
+  PlaceCompactSurfaces(result, client, !inset, tokens);
   result.navigation = {
       result.toolbar.x,
       result.toolbar.y + (result.tabs == TabLayout::kClassic ? strip : 0),
@@ -198,7 +198,7 @@ ShellLayout ComputeHorizontalLayout(const WindowState& window,
                              (separate || result.tabs == TabLayout::kCompact);
   result.card = client.Inset(
       margin, std::max(caption, hidden ? margin : height), margin, margin);
-  result.card_radius = rounded ? tokens.radius.card : 0;
+  result.card_radius = inset ? tokens.radius.card : 0;
   if (result.toolbar_visible && !result.toolbar.empty())
     result.drag_regions[result.drag_region_count++] = result.toolbar;
   return result;

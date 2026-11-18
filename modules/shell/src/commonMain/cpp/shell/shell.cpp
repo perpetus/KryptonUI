@@ -24,14 +24,17 @@ std::size_t Shell::AnchorKeyHash::operator()(
 
 Result<std::unique_ptr<Shell>> Shell::Create(void* parent_window,
                                              const KrBrowser& browser,
-                                             const Theme& initial_theme) {
+                                             const Theme& initial_theme,
+                                             bool hosted) {
   const auto started = std::chrono::steady_clock::now();
   auto shell = std::make_unique<Shell>(PassKey{}, browser);
   shell->store_.SetTheme(initial_theme);
   const auto& initial = shell->presenter_.Present(
       shell->store_, shell->CurrentLayout(), Dirty::kAll);
-  auto view = platform::CreateShellView(
-      {.parent_window = parent_window, .theme = initial.theme}, *shell);
+  auto view = platform::CreateShellView({.parent_window = parent_window,
+                                         .theme = initial.theme,
+                                         .hosted = hosted},
+                                        *shell);
   if (!view)
     return std::unexpected(std::move(view.error()));
   shell->view_ = std::move(*view);
@@ -51,6 +54,7 @@ Shell::Shell(PassKey, const KrBrowser& browser)
 }
 
 Shell::~Shell() {
+  OnTabSwitcherDismissed();
   if (store_.ui().boost_editor.open)
     (void)browser_.EditBoost(BoostEdit::kCancel,
                              store_.ui().boost_editor.draft);
@@ -93,6 +97,8 @@ void Shell::LogToHost(void* self, LogLevel level, std::string_view text) {
 // ------------------------------------------------------------------ state in
 
 void Shell::SetWindowState(const WindowState& state) {
+  if (!state.flags.Has(WindowFlag::kActive))
+    OnTabSwitcherDismissed();
   const bool entering_fullscreen =
       state.flags.HasAny(WindowFlag::kFullscreen |
                          WindowFlag::kTabFullscreen) &&
@@ -158,10 +164,43 @@ void Shell::DropImage(ImageId id) {
 }
 
 void Shell::SetSpaces(std::vector<Space> spaces, SpaceId active) {
+  if (active != store_.active_space())
+    OnTabSwitcherDismissed();
   store_.SetSpaces(std::move(spaces), active);
   const auto& editor = store_.ui().workspace_editor;
   if (editor.open && editor.value.id && !store_.FindSpace(editor.value.id))
     store_.CloseWorkspaceEditor();
+  ScheduleRender();
+}
+
+void Shell::SetSpaceProfiles(std::vector<ProfileChoice> choices,
+                             std::vector<SpaceProfile> spaces) {
+  store_.SetSpaceProfiles(std::move(choices), std::move(spaces));
+  ScheduleRender();
+}
+
+void Shell::SetPresented(bool presented) {
+  if (!presented)
+    StopDictation();
+  if (!presented) {
+    // Transient UI belongs to the visible profile; never leave it open behind
+    // another profile's shell.
+    OnTabSwitcherDismissed();
+    OnTabPreviewDismissed(store_.ui().tab_preview.request_id);
+    CloseAddress();
+    while (!menu_anchors_.empty())
+      DismissMenu(menu_anchors_.begin()->first);
+    DismissBoostEditor();
+    OnThemeEditorDismissed();
+    if (store_.ui().workspace_editor.open)
+      store_.CloseWorkspaceEditor();
+    if (store_.ui().settings.open)
+      OnSettingsDismissed();
+    if (store_.library().open)
+      OnLibraryDismissed();
+  }
+  if (view_)
+    view_->SetPresented(presented);
   ScheduleRender();
 }
 
@@ -172,6 +211,13 @@ void Shell::InsertTab(std::size_t index, Tab tab) {
 }
 
 void Shell::UpdateTab(Tab tab) {
+  if (store_.ui().tab_switcher.open) {
+    const auto* previous = store_.FindTab(tab.id);
+    if (previous && (previous->space != tab.space ||
+                     previous->flags.Has(TabFlag::kSleeping) !=
+                         tab.flags.Has(TabFlag::kSleeping)))
+      OnTabSwitcherDismissed();
+  }
   Check(store_.UpdateTab(std::move(tab)), "tab_updated");
 }
 
@@ -180,12 +226,25 @@ void Shell::MoveTab(TabId id, std::size_t to_index) {
 }
 
 void Shell::RemoveTab(TabId id) {
+  // A removal changes both ordering and capture identity. Close rather than
+  // allowing a delayed key release to activate a recycled/missing candidate.
+  if (store_.ui().tab_switcher.open)
+    OnTabSwitcherDismissed();
+  std::erase(recent_tabs_, id);
   if (store_.ui().tab_preview.tab == id)
     OnTabPreviewDismissed(store_.ui().tab_preview.request_id);
   Check(store_.RemoveTab(id), "tab_removed");
 }
 
 void Shell::SetActiveTab(TabId id) {
+  OnTabSwitcherDismissed();
+  if (id && store_.FindTab(id) &&
+      (recent_tabs_.empty() || recent_tabs_.front() != id)) {
+    std::erase(recent_tabs_, id);
+    recent_tabs_.insert(recent_tabs_.begin(), id);
+    if (recent_tabs_.size() > 64)
+      recent_tabs_.pop_back();
+  }
   if (id != store_.active_tab())
     CloseAddress();
   Check(store_.SetActiveTab(id), "set_active_tab");
@@ -210,6 +269,7 @@ void Shell::SetSuggestions(std::uint32_t request_id,
 }
 
 void Shell::ShowMenu(std::uint32_t request_id, const MenuTree& menu) {
+  OnTabSwitcherDismissed();
   if (EnvFlag("KR_UI_MENU_TRACE"))
     Log(LogLevel::kWarning, "menu trace: show request {} menus {} panel {}",
         request_id, menu.menus.size(), menu.panel);
@@ -233,6 +293,7 @@ void Shell::ShowMenu(std::uint32_t request_id, const MenuTree& menu) {
 }
 
 void Shell::FocusAddress(bool select_all) {
+  OnTabSwitcherDismissed();
   if (OnboardingActive())
     return;
   if (!select_all &&
@@ -378,14 +439,7 @@ void Shell::OnNewTab() {
   DismissBoostEditor();
   OnWorkspaceEditorDismissed();
   OnThemeEditorDismissed();
-  if (store_.appearance_prefs().flags.Has(AppearanceFlag::kNewTabPage)) {
-    // Chromium's New tab: the host opens its New Tab Page.
-    CloseAddress();
-    browser_.NewTab();
-    return;
-  }
-  // Zen's New tab: an empty command bar. Nothing opens until the user picks
-  // something.
+  // Ctrl+T is the universal launcher; its New tab command opens an actual NTP.
   command_opens_new_tab_ = true;
   if (browser_.SupportsSuggestionSnapshots()) {
     SetAddressText({}, false);
@@ -426,6 +480,12 @@ void Shell::OnWindowCommand(WindowCommand command) {
 }
 
 void Shell::OnActionInvoked(ActionId action, Rect anchor) {
+  const auto found = std::ranges::find(store_.actions(), action, &Action::id);
+  if (found != store_.actions().end() &&
+      found->kind == ActionKind::kDictation) {
+    ToggleDictation();
+    return;
+  }
   if (EnvFlag("KR_UI_MENU_TRACE"))
     Log(LogLevel::kWarning, "menu trace: action {}", action.value);
   browser_.InvokeAction(action, anchor);
@@ -479,9 +539,9 @@ void Shell::OnMenuClosed(std::uint32_t request_id) {
 }
 
 std::uint32_t Shell::OnTabPreviewRequested(TabId tab) {
-  if (!store_.FindTab(tab) || OnboardingActive() ||
-      store_.ui().command_bar.open || store_.ui().theme_editor.open ||
-      store_.ui().workspace_editor.open)
+  if (store_.ui().tab_switcher.open || !store_.FindTab(tab) ||
+      OnboardingActive() || store_.ui().command_bar.open ||
+      store_.ui().theme_editor.open || store_.ui().workspace_editor.open)
     return 0;
   OnTabPreviewDismissed(store_.ui().tab_preview.request_id);
   if (++next_tab_preview_request_ == 0)
@@ -505,7 +565,8 @@ void Shell::OnTabPreviewDismissed(std::uint32_t request_id) {
 void Shell::SetTabPreview(std::uint32_t request_id,
                           TabId tab,
                           const TabPreviewData& data) {
-  if (store_.SetTabPreview(request_id, tab, data))
+  if (store_.SetTabSwitcherPreview(request_id, tab, data) ||
+      store_.SetTabPreview(request_id, tab, data))
     ScheduleRender();
 }
 
@@ -530,6 +591,7 @@ void Shell::OnAddressEditChanged(std::string_view text,
   if (!bar.open || !AddressTextLength(text, selection) ||
       (text == bar.text && selection == bar.selection))
     return;
+  StopDictation();
   const bool changed = text != bar.text;
   const bool committed = bar.selection.composing && !selection.composing;
   if ((changed && !selection.composing) || committed)
@@ -581,6 +643,7 @@ void Shell::OnCommandSelectionMoved(int delta) {
 }
 
 void Shell::OnCommandAccepted(Disposition disposition) {
+  StopDictation();
   const CommandBarState& bar = store_.ui().command_bar;
   if (bar.selection.composing)
     return;
@@ -601,10 +664,8 @@ void Shell::OnSuggestionChosen(std::size_t index, Disposition disposition) {
 }
 
 void Shell::OnCommandBarDismissed() {
-  if (!store_.ui().command_bar.open)
-    return;
+  // Light dismissal keeps the focus destination of the outside interaction.
   CloseAddress();
-  browser_.FocusPage();
 }
 
 void Shell::OnSidebarRevealChanged(bool revealed) {

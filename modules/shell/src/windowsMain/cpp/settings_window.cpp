@@ -196,8 +196,7 @@ void SettingsWindow::Build() {
         if (weak.expired() || !visible_ ||
             args.WindowActivationState() !=
                 xaml::WindowActivationState::Deactivated ||
-            (browser_ && browser_->DialogOpen()) ||
-            (privacy_ && privacy_->DialogOpen()))
+            DialogOpen())
           return;
         // Opening and programmatic focus handoffs can also deactivate WinUI.
         // Only an actual outside press should light-dismiss this window.
@@ -225,7 +224,7 @@ void SettingsWindow::Build() {
       [this, weak](auto&&, const xaml::Input::KeyRoutedEventArgs& args) {
         if (!weak.expired() &&
             args.Key() == winrt::Windows::System::VirtualKey::Escape) {
-          if (browser_ && browser_->DialogOpen())
+          if (DialogOpen())
             return;
           Dismiss();
           args.Handled(true);
@@ -235,8 +234,9 @@ void SettingsWindow::Build() {
       winrt::auto_revoke,
       [this](auto&&,
              const xaml::Input::ProcessKeyboardAcceleratorEventArgs& args) {
-        if (!args.Handled() && context_.input.ForwardUnhandledKey(
-                                   static_cast<std::uint32_t>(args.Key())))
+        if (!args.Handled() && !DialogOpen() &&
+            context_.input.ForwardUnhandledKey(
+                static_cast<std::uint32_t>(args.Key())))
           args.Handled(true);
       });
   // AppWindow does not implement IWeakReferenceSource: own its explicit token.
@@ -288,29 +288,49 @@ void SettingsWindow::Build() {
   }
 }
 
+bool SettingsWindow::DialogOpen() const {
+  return (browser_ && browser_->DialogOpen()) ||
+         (local_models_ && local_models_->DialogOpen()) ||
+         (privacy_ && privacy_->DialogOpen());
+}
+
 void SettingsWindow::OnPointerPress(HWND target) {
-  if (!visible_ || !target || (browser_ && browser_->DialogOpen()) ||
-      (privacy_ && privacy_->DialogOpen()))
+  if (!visible_ || !target || DialogOpen() || Owns(target))
     return;
-  // Combo boxes, suggestions and owned popups are part of settings too.
-  for (HWND window = GetAncestor(target, GA_ROOT); window;
-       window = GetWindow(window, GW_OWNER))
-    if (window == native_)
-      return;
   context_.delegate.OnSettingsDeactivated();
 }
 
 void SettingsWindow::Dismiss() {
   if (!visible_)
     return;
+  Hide();
+  context_.delegate.OnSettingsDismissed();
+}
+
+void SettingsWindow::Hide() {
   fade_.Stop();
   SavePosition();
   if (browser_)
     browser_->DismissDialog();
+  if (local_models_)
+    local_models_->DismissDialog();
   visible_ = false;
+  // Hiding an active, non-popup owned window makes Windows activate the next
+  // window in z-order, which can be another application's: the browser then
+  // drops behind it as if minimized. Hand activation back to the owner first,
+  // as a closing dialog does. A window the user already activated keeps it,
+  // and keyboard focus is left to the browser's own activation handling.
+  if (const HWND owner = GetAncestor(owner_, GA_ROOT);
+      native_ && owner && GetForegroundWindow() == native_ &&
+      IsWindowVisible(owner) && !IsIconic(owner))
+    SetActiveWindow(owner);
   const auto window = app_window_;
-  hide_.Hide(native_, root_.DispatcherQueue(), [window] { window.Hide(); });
-  context_.delegate.OnSettingsDismissed();
+  hide_.Hide(native_, root_.DispatcherQueue(),
+             [this, weak = std::weak_ptr<int>(lifetime_), window] {
+               window.Hide();
+               if (!weak.expired())
+                 context_.hover_changed();
+             });
 }
 
 void SettingsWindow::Render(const ShellViewModel& vm) {
@@ -324,15 +344,8 @@ void SettingsWindow::Render(const ShellViewModel& vm) {
   if (!vm.settings.state.open) {
     if (privacy_)
       privacy_->Render(vm.privacy_features, vm.text, false);
-    if (visible_) {
-      fade_.Stop();
-      SavePosition();
-      if (browser_)
-        browser_->DismissDialog();
-      visible_ = false;
-      const auto window = app_window_;
-      hide_.Hide(native_, root_.DispatcherQueue(), [window] { window.Hide(); });
-    }
+    if (visible_)
+      Hide();
     return;
   }
   Build();
@@ -426,6 +439,23 @@ void SettingsWindow::Render(const ShellViewModel& vm) {
   }
   has_content |= vm.settings.state.section == SettingsSection::kPrivacy &&
                  !vm.privacy_features.rows.empty();
+  const bool models_visible =
+      vm.settings.state.section == SettingsSection::kLanguages &&
+      vm.settings.local_models && !vm.settings.local_models->rows.empty();
+  if (models_visible && !local_models_) {
+    local_models_ = std::make_unique<LocalModelsPanel>(context_, style_);
+    content_.Children().InsertAt(3, local_models_->Root());
+  }
+  if (local_models_) {
+    if (!models_visible)
+      local_models_->DismissDialog();
+    local_models_->Root().Visibility(models_visible
+                                         ? xaml::Visibility::Visible
+                                         : xaml::Visibility::Collapsed);
+    if (models_visible)
+      local_models_->Render(*vm.settings.local_models, vm.text, refresh_text);
+  }
+  has_content |= models_visible;
   empty_.Text(NativeText(UiText::kSettingsEmpty, vm.text));
   empty_.Visibility(has_content ? xaml::Visibility::Collapsed
                                 : xaml::Visibility::Visible);

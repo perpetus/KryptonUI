@@ -33,6 +33,22 @@
       }
     },
     {
+      "name": "release-max",
+      "displayName": "Windows Release Max (Chromium Clang, ThinLTO)",
+      "description": "Production UI only, using the compiler from the prepared sibling Krypton tree.",
+      "inherits": "windows-clang",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "${sourceDir}/../Krypton/build/src/third_party/llvm-build/Release+Asserts/bin/clang-cl.exe",
+        "CMAKE_CXX_COMPILER": "${sourceDir}/../Krypton/build/src/third_party/llvm-build/Release+Asserts/bin/clang-cl.exe",
+        "CMAKE_LINKER": "${sourceDir}/../Krypton/build/src/third_party/llvm-build/Release+Asserts/bin/lld-link.exe",
+        "CMAKE_AR": "${sourceDir}/../Krypton/build/src/third_party/llvm-build/Release+Asserts/bin/lld-link.exe",
+        "CMAKE_CONFIGURATION_TYPES": "Release",
+        "KR_RELEASE_MAX": "ON",
+        "KR_BUILD_TESTS": "OFF",
+        "KR_BUILD_PREVIEW": "OFF"
+      }
+    },
+    {
       "name": "headless",
       "displayName": "Headless (common layer + tests, any OS)",
       "inherits": "base",
@@ -43,6 +59,7 @@
     }
   ],
   "buildPresets": [
+    { "name": "release-max", "configurePreset": "release-max", "configuration": "Release", "targets": ["kr_shell"] },
     { "name": "windows-debug", "configurePreset": "windows", "configuration": "Debug" },
     { "name": "windows-release", "configurePreset": "windows", "configuration": "Release" },
     { "name": "windows-clang-debug", "configurePreset": "windows-clang", "configuration": "Debug" },

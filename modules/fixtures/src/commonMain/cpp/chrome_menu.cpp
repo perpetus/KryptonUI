@@ -58,7 +58,7 @@ bool MockBrowser::ShowChromeMenu(std::uint32_t request,
       (kind != KR_MENU_APP && kind != KR_MENU_CREATE && kind != KR_MENU_SPACE &&
        kind != KR_MENU_WORKSPACES && kind != KR_MENU_LIBRARY &&
        kind != KR_MENU_SITE_DATA && kind != KR_MENU_SIDEBAR_LAYOUT &&
-       kind != KR_MENU_SECURITY))
+       kind != KR_MENU_SECURITY && kind != KR_MENU_SIDEBAR))
     return false;
   using C = ChromeCommand;
   const bool workspace_editable =
@@ -88,6 +88,7 @@ bool MockBrowser::ShowChromeMenu(std::uint32_t request,
     kSiteSettings,
     kSiteFooter,
     kSiteMore,
+    kAppearance,
     kCount
   };
   std::array<std::vector<KrMenuItem>, kCount> menus;
@@ -283,6 +284,33 @@ bool MockBrowser::ShowChromeMenu(std::uint32_t request,
                                 {}, workspace_editable));
     menus[kRoot].push_back(
         Item(C::kManageWorkspaces, "Manage Workspaces", "\uE713"));
+  } else if (kind == KR_MENU_SIDEBAR) {
+    menus[kAppearance] = {
+        Item(C::kWorkspaceTheme, "Edit theme...", "\uE790", {},
+             KR_HAS_SLOT(&ui_, KrShellUI, show_theme_editor) &&
+                 ui_.show_theme_editor),
+        Item(C::kSettings, "Appearance settings...", "\uE713")};
+    menus[kRoot] = {Item(C::kNewTab, "New Tab", "\uE710", "Ctrl+T"),
+                    Item(C::kReopen, "Reopen Closed Tab", "\uE7A7",
+                         "Ctrl+Shift+T", !closed_tabs_.empty())};
+    if (target == KR_SIDEBAR_TABS)
+      menus[kRoot].push_back(Item(C::kCreateFolder, "New folder", "\uE8F4"));
+    if (target == KR_SIDEBAR_ESSENTIALS) {
+      const auto* active = Find(active_tab_);
+      const bool essential = active && (active->flags & KR_TAB_FAVORITE);
+      menus[kRoot].push_back(
+          check(Item(C::kToggleEssential,
+                     essential ? "Remove current tab from Essentials"
+                               : "Add current tab to Essentials",
+                     "\uE734", {}, active != nullptr),
+                essential));
+    }
+    menus[kRoot].push_back(Item(C::kCreateWorkspace, "New workspace...",
+                                "\uE710", {}, workspace_editable));
+    menus[kRoot].push_back(kSeparator);
+    menus[kRoot].push_back(Branch("Browser Layout", kLayouts, "\uE8A7"));
+    menus[kRoot].push_back(Branch("Compact Mode", kCompact, "\uE8A7"));
+    menus[kRoot].push_back(Branch("Appearance", kAppearance, "\uE790"));
   } else if (kind == KR_MENU_SPACE) {
     menus[kContainers] = {Item(C::kManageWorkspaces, "Default", {}, {}, false)};
     menus[kRoot] = {

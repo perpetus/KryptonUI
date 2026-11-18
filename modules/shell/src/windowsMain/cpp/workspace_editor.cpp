@@ -14,7 +14,107 @@ WorkspaceEditor::~WorkspaceEditor() {
   save_.revoke();
   remove_.revoke();
   fallback_.revoke();
+  profile_changed_.revoke();
   Close();
+}
+
+bool WorkspaceEditor::CreatingProfile() const {
+  return profile_ && profile_.SelectedIndex() >= 0 &&
+         static_cast<std::size_t>(profile_.SelectedIndex()) ==
+             profile_ids_.size();
+}
+
+void WorkspaceEditor::Submit(
+    const controls::ContentDialogButtonClickEventArgs& args) {
+  const auto name = winrt::to_string(name_.Text());
+  const auto glyph = glyph_->Value();
+  bool accepted = false;
+  if (profiles_shown_) {
+    const auto index = profile_.SelectedIndex();
+    const bool create = CreatingProfile();
+    const auto profile = !create && index >= 0 &&
+                                 static_cast<std::size_t>(index) <
+                                     profile_ids_.size()
+                             ? profile_ids_[static_cast<std::size_t>(index)]
+                             : ProfileId{};
+    std::string created;
+    if (create)
+      created = winrt::to_string(new_profile_.Text());
+    accepted = create && created.empty()
+                   ? false
+                   : context_.delegate
+                         .OnWorkspaceProfileSubmitted(
+                             WorkspaceEditKind::kUpsert, name, glyph, profile,
+                             created)
+                         .has_value();
+  } else {
+    accepted = context_.delegate
+                   .OnWorkspaceSubmitted(WorkspaceEditKind::kUpsert, name,
+                                         glyph)
+                   .has_value();
+  }
+  if (!accepted) {
+    error_.Text(required_text_);
+    error_.Visibility(xaml::Visibility::Visible);
+    args.Cancel(true);
+  } else {
+    requested_ = false;
+    closing_ = true;
+  }
+}
+
+void WorkspaceEditor::RenderProfiles(const WorkspaceEditorVm& vm,
+                                     UiTextView text) {
+  profiles_shown_ = !vm.icon_tab && !vm.profiles.empty();
+  const auto visibility = profiles_shown_ ? xaml::Visibility::Visible
+                                          : xaml::Visibility::Collapsed;
+  profile_.Visibility(visibility);
+  if (!profiles_shown_) {
+    new_profile_.Visibility(xaml::Visibility::Collapsed);
+    profile_note_.Visibility(xaml::Visibility::Collapsed);
+    return;
+  }
+  // Rebuild the short list only when the host's choices change.
+  bool changed = profile_ids_.size() != vm.profiles.size();
+  for (std::size_t i = 0; !changed && i < vm.profiles.size(); ++i)
+    changed = profile_ids_[i] != vm.profiles[i].id ||
+              profile_names_[i] != vm.profiles[i].name;
+  const auto selected_id = vm.profile;
+  if (changed || profile_serial_ != vm.serial) {
+    profile_serial_ = vm.serial;
+    profile_ids_.clear();
+    profile_names_.clear();
+    profile_.Items().Clear();
+    int selected = -1;
+    for (const auto& choice : vm.profiles) {
+      if ((selected_id && choice.id == selected_id) ||
+          (!selected_id && choice.current))
+        selected = static_cast<int>(profile_ids_.size());
+      profile_ids_.push_back(choice.id);
+      profile_names_.push_back(choice.name);
+      profile_.Items().Append(winrt::box_value(winrt::to_hstring(choice.name)));
+    }
+    profile_.Items().Append(
+        winrt::box_value(winrt::to_hstring(text[UiText::kWorkspaceNewProfile])));
+    profile_.SelectedIndex(selected);
+    new_profile_.Text(L"");
+  }
+  profile_.Header(
+      winrt::box_value(winrt::to_hstring(text[UiText::kWorkspaceProfile])));
+  new_profile_.Header(
+      winrt::box_value(winrt::to_hstring(text[UiText::kWorkspaceProfileName])));
+  // Tabs and folders keep their profile's cookies and history. Reassignment
+  // waits until the Space is empty; the host enforces this too.
+  profile_.IsEnabled(!vm.profile_locked);
+  new_profile_.Visibility(CreatingProfile() ? xaml::Visibility::Visible
+                                            : xaml::Visibility::Collapsed);
+  const bool unavailable = vm.profile_status != SpaceProfileStatus::kReady;
+  profile_note_.Text(winrt::to_hstring(
+      text[unavailable ? UiText::kWorkspaceProfileUnavailable
+                       : UiText::kWorkspaceProfileLocked]));
+  profile_note_.Visibility(vm.profile_locked || unavailable
+                               ? xaml::Visibility::Visible
+                               : xaml::Visibility::Collapsed);
 }
 
 void WorkspaceEditor::Build() {
@@ -30,25 +130,33 @@ void WorkspaceEditor::Build() {
   error_ = Label(L"", kTokens.type.size);
   error_.TextWrapping(xaml::TextWrapping::Wrap);
   error_.Visibility(xaml::Visibility::Collapsed);
+  profile_ = controls::ComboBox();
+  profile_.HorizontalAlignment(xaml::HorizontalAlignment::Stretch);
+  profile_.Visibility(xaml::Visibility::Collapsed);
+  new_profile_ = controls::TextBox();
+  new_profile_.MaxLength(128);
+  new_profile_.Visibility(xaml::Visibility::Collapsed);
+  profile_note_ = Label(L"", kTokens.type.size);
+  profile_note_.TextWrapping(xaml::TextWrapping::Wrap);
+  profile_note_.Visibility(xaml::Visibility::Collapsed);
+  profile_changed_ = profile_.SelectionChanged(
+      winrt::auto_revoke, [this](auto&&, auto&&) {
+        new_profile_.Visibility(CreatingProfile()
+                                    ? xaml::Visibility::Visible
+                                    : xaml::Visibility::Collapsed);
+      });
   content.Children().Append(name_);
   content.Children().Append(glyph_->Root());
+  content.Children().Append(profile_);
+  content.Children().Append(new_profile_);
+  content.Children().Append(profile_note_);
   content.Children().Append(error_);
   dialog_.Content(content);
   dialog_.DefaultButton(controls::ContentDialogButton::Primary);
   save_ = dialog_.PrimaryButtonClick(
       winrt::auto_revoke,
       [this](auto&&, const controls::ContentDialogButtonClickEventArgs& args) {
-        const auto name = winrt::to_string(name_.Text());
-        const auto glyph = glyph_->Value();
-        if (!context_.delegate.OnWorkspaceSubmitted(WorkspaceEditKind::kUpsert,
-                                                    name, glyph)) {
-          error_.Text(required_text_);
-          error_.Visibility(xaml::Visibility::Visible);
-          args.Cancel(true);
-        } else {
-          requested_ = false;
-          closing_ = true;
-        }
+        Submit(args);
       });
   remove_ = dialog_.SecondaryButtonClick(
       winrt::auto_revoke,
@@ -191,6 +299,7 @@ void WorkspaceEditor::Render(const WorkspaceEditorVm& vm,
   }
   name_.Visibility(vm.icon_tab ? xaml::Visibility::Collapsed
                                : xaml::Visibility::Visible);
+  RenderProfiles(vm, text);
   requested_ = true;
   island_.Show(client, scale, theme);
   TryOpen();

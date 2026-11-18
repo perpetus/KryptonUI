@@ -16,13 +16,18 @@ void MockBrowser::PushFolders() const {
                          {folder.name.data(), folder.name.size()},
                          {folder.glyph.data(), folder.glyph.size()},
                          folder.order,
-                         folder.collapsed};
+                         folder.collapsed,
+        folder.live_kind,
+        {folder.live_source.data(), folder.live_source.size()},
+        folder.live_interval_minutes,
+        folder.live_max_items,
+        {folder.live_status.data(), folder.live_status.size()}};
     (void)ui_.upsert_folder(ui_.self, &value);
   }
 }
 KrResult MockBrowser::ExecuteFolderCommand(const KrFolderCommand& command) {
   if (!KR_HAS_FIELD(&command, KrFolderCommand, collapsed) ||
-      command.kind > KR_FOLDER_NEW_TAB ||
+      command.kind > KR_FOLDER_RESTORE_LIVE_ITEMS ||
       (!command.name.data && command.name.size) ||
       (!command.glyph.data && command.glyph.size))
     return KR_ERR_INVALID_ARGUMENT;
@@ -40,6 +45,30 @@ KrResult MockBrowser::ExecuteFolderCommand(const KrFolderCommand& command) {
     return false;
   };
   auto found = std::ranges::find(folders_, command.folder, &MockFolder::id);
+  if (command.kind >= KR_FOLDER_SET_LIVE) {
+    if (found == folders_.end())
+      return KR_ERR_INVALID_ARGUMENT;
+    if (command.kind == KR_FOLDER_SET_LIVE) {
+      if (!KR_HAS_FIELD(&command, KrFolderCommand, live_max_items) ||
+          command.live_kind > KR_LIVE_FOLDER_GITHUB_ISSUES ||
+          command.live_source.size > 2048 ||
+          (!command.live_source.data && command.live_source.size) ||
+          command.live_interval_minutes < 15 ||
+          command.live_interval_minutes > 480 || !command.live_max_items ||
+          command.live_max_items > 100)
+        return KR_ERR_INVALID_ARGUMENT;
+      found->live_kind = command.live_kind;
+      found->live_source =
+          command.live_source.size
+              ? std::string(command.live_source.data, command.live_source.size)
+              : "";
+      found->live_interval_minutes = command.live_interval_minutes;
+      found->live_max_items = command.live_max_items;
+    }
+    found->live_status = "Preview only; external sources are not fetched.";
+    PushFolders();
+    return KR_OK;
+  }
   if (command.kind != KR_FOLDER_CREATE && command.kind != KR_FOLDER_MOVE_TAB &&
       found == folders_.end())
     return KR_ERR_INVALID_ARGUMENT;

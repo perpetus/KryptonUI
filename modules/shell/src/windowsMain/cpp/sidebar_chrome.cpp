@@ -435,8 +435,19 @@ void SidebarChrome::Render(std::span<const SpaceVm> spaces) {
                                      space.icon_color.a()
                                  ? context_.brushes.For(space.icon_color)
                                  : context_.brushes.workspace_icon);
-    button->control.Background(space.active ? context_.brushes.active
-                                            : context_.brushes.transparent);
+    // The active space is drawn at full strength and the others dimmed, with
+    // no fill. High contrast keeps the system selection fill instead, since
+    // opacity alone is not a reliable cue there.
+    const bool high_contrast = context_.brushes.high_contrast();
+    button->control.Background(space.active && high_contrast
+                                   ? context_.brushes.active
+                                   : context_.brushes.transparent);
+    const double opacity =
+        space.active || high_contrast
+            ? 1.0
+            : static_cast<double>(kTokens.workspace_footer.inactive_opacity);
+    if (button->glyph.Opacity() != opacity)
+      button->glyph.Opacity(opacity);
     if (inserted)
       workspace_icons_.Children().InsertAt(index, button->control);
     ++index;

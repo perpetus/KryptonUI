@@ -99,11 +99,44 @@ Result<void> NativeTitleBar::Initialize(HWND parent,
   }
 }
 
+namespace {
+struct MetricsEntry {
+  HWND parent;
+  void* context;
+  NativeTitleBar::MetricsListener listener;
+};
+thread_local std::vector<MetricsEntry> metrics_listeners;
+thread_local std::vector<std::pair<HWND, NativeTitleBarMetrics>>
+    current_metrics;
+}  // namespace
+
+void NativeTitleBar::Listen(HWND parent,
+                            void* context,
+                            MetricsListener listener) {
+  Unlisten(context);
+  metrics_listeners.push_back({parent, context, listener});
+}
+
+void NativeTitleBar::Unlisten(void* context) noexcept {
+  std::erase_if(metrics_listeners,
+                [context](const auto& entry) { return entry.context == context; });
+}
+
+std::optional<NativeTitleBarMetrics> NativeTitleBar::Current(
+    HWND parent) noexcept {
+  for (const auto& [window, metrics] : current_metrics)
+    if (window == parent)
+      return metrics;
+  return std::nullopt;
+}
+
 NativeTitleBar::~NativeTitleBar() {
   Reset();
 }
 
 void NativeTitleBar::Reset() noexcept {
+  std::erase_if(current_metrics,
+                [this](const auto& entry) { return entry.first == parent_; });
   lifetime_.reset();
   metrics_changed_.Reset();
   delegate_ = nullptr;
@@ -193,6 +226,22 @@ void NativeTitleBar::PublishMetrics() {
   }
   standard_metrics_.enabled = true;
   delegate_->OnNativeTitleBarChanged(standard_metrics_);
+  const auto parent = parent_;
+  const auto metrics = standard_metrics_;
+  bool stored = false;
+  for (auto& [window, value] : current_metrics) {
+    if (window == parent) {
+      value = metrics;
+      stored = true;
+    }
+  }
+  if (!stored)
+    current_metrics.emplace_back(parent, metrics);
+  // A listener may unregister; notify a snapshot.
+  const auto listeners = metrics_listeners;
+  for (const auto& entry : listeners)
+    if (entry.parent == parent && entry.listener)
+      entry.listener(entry.context, metrics);
 }
 
 void NativeTitleBar::PassInputThrough() noexcept try {

@@ -29,6 +29,21 @@ KrStr Borrow(std::string_view value) noexcept {
 }
 }  // namespace
 
+bool BrowserPort::CanDictate() const noexcept {
+  return KR_HAS_SLOT(&table_, KrBrowser, start_dictation) &&
+         table_.start_dictation &&
+         KR_HAS_SLOT(&table_, KrBrowser, stop_dictation) &&
+         table_.stop_dictation;
+}
+void BrowserPort::StartDictation(std::uint32_t request) const {
+  if (CanDictate())
+    table_.start_dictation(table_.self, request);
+}
+void BrowserPort::StopDictation(std::uint32_t request) const {
+  if (CanDictate())
+    table_.stop_dictation(table_.self, request);
+}
+
 void BrowserPort::CancelSuggestions(std::uint32_t request) const {
   if (request && KR_HAS_SLOT(&table_, KrBrowser, cancel_suggestions) &&
       table_.cancel_suggestions)
@@ -90,6 +105,30 @@ void BrowserPort::EditWorkspace(WorkspaceEditKind kind,
   const KrSpace value{sizeof(KrSpace), space.id.value, Borrow(space.name),
                       Borrow(space.glyph), space.color.argb};
   table_.edit_workspace(table_.self, std::to_underlying(kind), &value);
+}
+
+bool BrowserPort::CanSetSpaceProfiles() const noexcept {
+  return KR_HAS_SLOT(&table_, KrBrowser, create_space) &&
+         table_.set_space_profile && table_.create_space;
+}
+
+void BrowserPort::SetSpaceProfile(SpaceId space,
+                                  ProfileId profile,
+                                  std::string_view new_profile) const {
+  if (CanSetSpaceProfiles())
+    (void)table_.set_space_profile(table_.self, space.value, profile.value,
+                                   Borrow(new_profile));
+}
+
+void BrowserPort::CreateSpace(const Space& space,
+                              ProfileId profile,
+                              std::string_view new_profile) const {
+  if (!CanSetSpaceProfiles())
+    return;
+  const KrSpace value{sizeof(KrSpace), 0, Borrow(space.name),
+                      Borrow(space.glyph), space.color.argb};
+  (void)table_.create_space(table_.self, &value, profile.value,
+                            Borrow(new_profile));
 }
 
 void BrowserPort::SetShellMetrics(float width, float height) const {

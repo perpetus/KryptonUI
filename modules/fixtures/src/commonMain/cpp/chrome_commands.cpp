@@ -19,6 +19,12 @@ bool MockBrowser::RunChromeCommand(std::int32_t id) {
   };
   const auto command = static_cast<C>(id);
   switch (command) {
+    case C::kToggleEssential:
+      if (auto* tab = Find(active_tab_)) {
+        tab->flags ^= KR_TAB_FAVORITE;
+        PushTab(*tab);
+      }
+      break;
     case C::kCreateFolder: {
       const KrFolderCommand folder{.struct_size = sizeof(KrFolderCommand),
                                    .kind = KR_FOLDER_CREATE,
@@ -32,8 +38,12 @@ bool MockBrowser::RunChromeCommand(std::int32_t id) {
         return false;
       return ui_.show_split_chooser(ui_.self) == KR_OK;
     case C::kNewTab:
-      OpenTab("", KR_OPEN_NEW_TAB);
-      FocusAddress(true);
+      if (KR_HAS_SLOT(&ui_, KrShellUI, open_launcher) && ui_.open_launcher)
+        ui_.open_launcher(ui_.self);
+      else {
+        OpenTab("", KR_OPEN_NEW_TAB);
+        FocusAddress(true);
+      }
       break;
     case C::kNewWindow:
       if (callbacks_.new_window)
@@ -218,6 +228,7 @@ bool MockBrowser::RunChromeCommand(std::int32_t id) {
               : std::clamp(page_zoom_percent_ +
                                (static_cast<C>(id) == C::kZoomIn ? 10 : -10),
                            30, 500);
+      PushActions();
       if (callbacks_.page_changed)
         callbacks_.page_changed();
       if (chrome_menu_request_)

@@ -11,7 +11,13 @@ std::optional<FolderVm> Shell::OnFolderRequested(FolderId id) const {
     ++depth;
   return FolderVm{
       folder->id,    folder->parent,    folder->name,           folder->glyph,
-      folder->order, folder->collapsed, depth < kMaxFolderDepth};
+      folder->order, folder->collapsed, depth < kMaxFolderDepth,
+                  folder->live_kind,
+                  folder->live_source,
+                  folder->live_interval_minutes,
+                  folder->live_max_items,
+                  folder->live_status,
+                  folder->live_supported};
 }
 bool BrowserPort::CanFolders() const noexcept {
   return KR_HAS_SLOT(&table_, KrBrowser, folder_command) &&
@@ -30,7 +36,11 @@ Result<void> BrowserPort::FolderCommand(
                               command.index,
                               {command.name.data(), command.name.size()},
                               {command.glyph.data(), command.glyph.size()},
-                              command.collapsed};
+                              command.collapsed,
+      command.live_kind,
+      {command.live_source.data(), command.live_source.size()},
+      command.live_interval_minutes,
+      command.live_max_items};
   if (table_.folder_command(table_.self, &value) != KR_OK)
     return Fail(ErrorCode::kInvalidArgument, "Folder command was rejected");
   return {};

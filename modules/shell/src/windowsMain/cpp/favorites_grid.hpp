@@ -70,6 +70,7 @@ class FavoritesGrid {
              bool animate);
   ViewContext& context_;
   controls::Grid root_;
+  xaml::UIElement::RightTapped_revoker context_menu_;
   std::vector<TabId> order_;
   std::unordered_map<TabId, Tile> tiles_;
   std::size_t columns_ = 0;
@@ -80,8 +81,6 @@ class FavoritesGrid {
   winrt::Microsoft::UI::Composition::Vector3KeyFrameAnimation shift_{nullptr};
   TabId dragged_;
   std::optional<std::size_t> gap_;
-  // The gap needs one more row than the Essentials fill.
-  bool extra_row_ = false;
   // Tiles keep their drop positions until the host answers the drop.
   bool settling_ = false;
 };

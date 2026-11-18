@@ -24,6 +24,8 @@
 #include "krypton/ui/core/env.hpp"
 #include "krypton/ui/layout/horizontal_layout.hpp"
 #include "krypton/ui/platform/platform.hpp"
+#include "krypton/ui/presentation/folder_layout.hpp"
+#include "live_folder_editor.hpp"
 #include "tab_preview_surface.hpp"
 
 namespace kr::win {
@@ -73,7 +75,7 @@ void TabList::Render(const ShellViewModel& vm) {
         record.row->folder_icon->Update(
             !record.row->folder_collapsed, record.contains_active,
             record.row->data.url, folder_theme_, context_.brushes,
-            context_.motion, rendered_);
+            context_.motion, rendered_, record.row->folder_live_kind);
       }
     }
   }
@@ -478,14 +480,8 @@ void TabList::SetText(UiTextView text) {
                     NativeText(UiText::kWorkspaceEmoji, text),
                     NativeText(UiText::kWorkspaceCustomEmoji, text)};
 
-  constexpr std::array folder_keys{
-      UiText::kFolder,           UiText::kNewFolder,
-      UiText::kNewSubfolder,     UiText::kRenameFolder,
-      UiText::kUnpackFolder,     UiText::kDeleteFolder,
-      UiText::kMoveFolderToRoot, UiText::kSaveFolder,
-      UiText::kFolderIcon,       UiText::kMoveFolderWorkspace};
-  for (std::size_t i = 0; i < folder_keys.size(); ++i)
-    folder_text_[i] = NativeText(folder_keys[i], text);
+  for (std::size_t i = 0; i < kFolderTextKeys.size(); ++i)
+    folder_text_[i] = NativeText(kFolderTextKeys[i], text);
   Accessible(tabs_, NativeText(UiText::kTabs, text));
   close_text_ = NativeText(UiText::kCloseTab, text);
   mute_text_ = NativeText(UiText::kMuteTab, text);
@@ -552,6 +548,18 @@ void TabList::BuildTabs() {
   ScrollViewer::SetVerticalScrollBarVisibility(tabs_,
                                                ScrollBarVisibility::Auto);
   Accessible(tabs_, NativeText(UiText::kTabs));
+  list_context_ = tabs_.RightTapped(
+      winrt::auto_revoke,
+      [this](auto&&, const xaml::Input::RightTappedRoutedEventArgs& args) {
+        // Tab/folder rows consume their own requests before they reach here.
+        // Section labels, gaps and the list's unused space share this zone.
+        const auto point = args.GetPosition(tabs_);
+        const auto bounds = context_.bounds(tabs_);
+        context_.request_menu(MenuKind::kSidebar,
+                              std::to_underlying(SidebarZone::kTabs),
+                              {bounds.x + point.X, bounds.y + point.Y, 0, 0});
+        args.Handled(true);
+      });
   sized_ = tabs_.SizeChanged(winrt::auto_revoke, [this](auto&&, auto&&) {
     LayoutHorizontalRows();
     if (horizontal_) {
@@ -954,15 +962,18 @@ void TabList::UpdateTabRow(TabRecord& record, bool animate_background) {
   if (!record.row)
     return;
   auto& row = *record.row;
-  if (row.folder)
+  if (row.folder) {
     row.configured = false;
+    SetToolTip(row.background, L"");
+    row.folder_live_kind = 0;
+    row.folder_sign_in_required = false;
+    row.folder_live_status.clear();
+  }
   row.folder = {};
   if (row.folder_icon)
     row.folder_icon->Root().Visibility(Visibility::Collapsed);
   row.depth = record.depth;
-  row.background.Padding(
-      Thickness{kTokens.spacing.tab_padding * static_cast<float>(row.depth + 1),
-                0, 0, 0});
+  row.background.Padding(Thickness{FolderRowInset(row.depth), 0, 0, 0});
   auto& data = row.data;
   const auto border = data.active && data.essential
                           ? context_.brushes.favorite_active_border
@@ -1061,11 +1072,8 @@ void TabList::ApplyRowContent(TabRow& row) {
                                      : kTokens.spacing.icon_size +
                                            kTokens.spacing.tab_icon_gap);
   }
-  row.background.Padding(Thickness{
-      content.centered
-          ? 0
-          : kTokens.spacing.tab_padding * static_cast<float>(row.depth + 1),
-      0, 0, 0});
+  row.background.Padding(
+      Thickness{content.centered ? 0 : FolderRowInset(row.depth), 0, 0, 0});
   row.title.Visibility(content.centered ? Visibility::Collapsed
                                         : Visibility::Visible);
   row.status.Visibility(content.centered ? Visibility::Collapsed

@@ -22,9 +22,15 @@ class CommandBar {
               xaml::ElementTheme theme,
               const ImageStore* images);
   void Close() noexcept;
+  void Dismiss();
+  void NativeFocusChanged(HWND next, HWND previous);
+  [[nodiscard]] bool Contains(Point point) const noexcept;
   void SetFocusBlocked(bool blocked) noexcept;
   void SetAddressAnchor(Rect anchor) noexcept;
   [[nodiscard]] bool IsOpen() const noexcept { return requested_open_; }
+  [[nodiscard]] bool OwnsInput() const noexcept {
+    return requested_open_ || island_.IsClosing();
+  }
   void Raise() noexcept { island_.Raise(); }
   void SetText(UiTextView text);
 
@@ -38,10 +44,14 @@ class CommandBar {
   void Reposition() noexcept;
   void OpenWhenLoaded() noexcept;
   void FocusInput() noexcept;
+  void QueueFocusLossCheck();
+  [[nodiscard]] bool HasPopupFocus() const;
+  void HideIsland() noexcept;
   void ReportEdit();
   void QueueEdit();
   ViewContext& context_;
   ContentFade fade_;
+  EdgeShimmer shimmer_;
   TransientSurface island_;
   std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
   controls::Primitives::Popup command_popup_{nullptr};
@@ -50,11 +60,16 @@ class CommandBar {
   controls::Border surface_{nullptr};
   controls::Grid input_row_{nullptr};
   controls::ScrollViewer input_scroll_{nullptr};
+  controls::Border results_rule_{nullptr};
+  controls::Border shimmer_host_{nullptr};
   controls::TextBox command_input_{nullptr};
+  std::unique_ptr<NativeButton> microphone_;
+  ActionId microphone_action_;
   std::unique_ptr<SuggestionList> suggestions_;
   winrt::Windows::UI::ViewManagement::UISettings text_settings_{nullptr};
   Rect client_;
   Rect address_anchor_;
+  float surface_radius_ = kTokens.radius.overlay;
   bool floating_ = true;
   bool menu_backdrop_ = false;
   std::uint32_t command_serial_ = 0;
@@ -62,13 +77,17 @@ class CommandBar {
   bool edit_pending_ = false;
   bool positioning_ = false;
   bool requested_open_ = false;
+  bool popup_open_requested_ = false;
   bool focus_pending_ = false;
+  bool focus_loss_queued_ = false;
   bool focus_blocked_ = false;
   bool composing_ = false;
   AddressSelection selection_pending_;
   winrt::hstring placeholder_ = NativeText(UiText::kAddress);
+  winrt::hstring launcher_placeholder_ = NativeText(UiText::kCommandLauncher);
   xaml::FlowDirection direction_ = xaml::FlowDirection::LeftToRight;
   xaml::UIElement::PreviewKeyDown_revoker command_key_;
+  xaml::UIElement::PreviewKeyDown_revoker microphone_key_;
   xaml::UIElement::ProcessKeyboardAccelerators_revoker fallback_key_;
   controls::TextBox::TextChanged_revoker command_text_;
   controls::TextBox::SelectionChanged_revoker command_selection_;

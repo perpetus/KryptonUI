@@ -146,6 +146,19 @@ void Store::SetSpaces(std::vector<Space> spaces, SpaceId active) {
   MarkDirty(Dirty::kSpaces | Dirty::kTabs | Dirty::kTheme);
 }
 
+void Store::SetSpaceProfiles(std::vector<ProfileChoice> choices,
+                             std::vector<SpaceProfile> spaces) {
+  profile_choices_ = std::move(choices);
+  space_profiles_ = std::move(spaces);
+  MarkDirty(Dirty::kSpaces | Dirty::kWorkspaceEditor);
+}
+
+const SpaceProfile* Store::FindSpaceProfile(SpaceId id) const {
+  const auto found =
+      std::ranges::find(space_profiles_, id, &SpaceProfile::space);
+  return found == space_profiles_.end() ? nullptr : &*found;
+}
+
 void Store::SetNav(NavState nav) {
   loading_.SyncNavigation(active_tab_, nav.is_loading,
                           !nav_.is_loading || nav.full_url != nav_.full_url,
@@ -220,6 +233,13 @@ void Store::SetCommandPointerOrigin() {
     return;
   ui_.command_bar.pointer_open = true;
   MarkDirty(Dirty::kCommandBar);
+}
+
+void Store::SetCommandLauncher(bool value) {
+  if (ui_.command_bar.launcher != value) {
+    ui_.command_bar.launcher = value;
+    MarkDirty(Dirty::kCommandBar);
+  }
 }
 
 void Store::MarkCommandTyped() {

@@ -34,8 +34,31 @@ LRESULT NativeHit(FrameHit hit) noexcept {
 }
 }  // namespace
 
+namespace {
+// Hosted frames share a parent subclassed by its owning NativeFrame.
+thread_local std::vector<NativeFrame*> hosted_frames;
+}  // namespace
+
 NativeFrame::~NativeFrame() {
   Reset();
+}
+
+Result<void> NativeFrame::InitializeHosted(HWND parent,
+                                           void* context,
+                                           SettingsChanged settings,
+                                           ActivationChanged activation) {
+  if (parent_ || !IsWindow(parent) ||
+      GetWindowThreadProcessId(parent, nullptr) != GetCurrentThreadId())
+    return Fail(ErrorCode::kInvalidArgument,
+                "Frame requires an owning UI thread");
+  hosted_frames.push_back(this);
+  hosted_ = true;
+  parent_ = parent;
+  context_ = context;
+  settings_ = settings;
+  activation_ = activation;
+  RefreshMetrics();
+  return {};
 }
 
 Result<void> NativeFrame::Initialize(HWND parent,
@@ -104,9 +127,12 @@ void NativeFrame::Reset() noexcept {
       RemoveWindowSubclass(child, IslandProcedure,
                            reinterpret_cast<UINT_PTR>(this));
   children_.clear();
-  if (IsWindow(parent_))
+  if (hosted_)
+    std::erase(hosted_frames, this);
+  else if (IsWindow(parent_))
     RemoveWindowSubclass(parent_, ParentProcedure,
                          reinterpret_cast<UINT_PTR>(this));
+  hosted_ = false;
   parent_ = nullptr;
   context_ = nullptr;
   settings_ = nullptr;
@@ -164,9 +190,24 @@ LRESULT CALLBACK NativeFrame::ParentProcedure(HWND window,
                                               UINT_PTR id,
                                               DWORD_PTR data) noexcept {
   auto* frame = reinterpret_cast<NativeFrame*>(data);
-  if (message == WM_ACTIVATEAPP && frame->activation_) {
+  // Callbacks may destroy a hosted shell; iterate a snapshot.
+  const auto hosted = [window] {
+    std::vector<NativeFrame*> result;
+    for (auto* candidate : hosted_frames)
+      if (candidate->parent_ == window)
+        result.push_back(candidate);
+    return result;
+  };
+  const auto alive = [](NativeFrame* candidate) {
+    return std::ranges::find(hosted_frames, candidate) != hosted_frames.end();
+  };
+  if (message == WM_ACTIVATEAPP) {
     try {
-      frame->activation_(frame->context_, wparam != 0);
+      if (frame->activation_)
+        frame->activation_(frame->context_, wparam != 0);
+      for (auto* other : hosted())
+        if (alive(other) && other->activation_)
+          other->activation_(other->context_, wparam != 0);
     } catch (...) {
       OutputDebugStringW(L"KryptonUI activation notification failed\n");
     }
@@ -186,17 +227,25 @@ LRESULT CALLBACK NativeFrame::ParentProcedure(HWND window,
   if (message == WM_NCDESTROY) {
     RemoveWindowSubclass(window, ParentProcedure, id);
     frame->parent_ = nullptr;
+    for (auto* other : hosted())
+      other->parent_ = nullptr;
     return DefSubclassProc(window, message, wparam, lparam);
   }
   // Do not touch the instance after forwarding: host dispatch may destroy it.
   if (message == WM_WINDOWPOSCHANGED || message == WM_DPICHANGED ||
       message == WM_STYLECHANGED || message == WM_SETTINGCHANGE ||
-      message == WM_THEMECHANGED)
+      message == WM_THEMECHANGED) {
     frame->RefreshMetrics();
-  if ((message == WM_SETTINGCHANGE || message == WM_SYSCOLORCHANGE) &&
-      frame->settings_) {
+    for (auto* other : hosted())
+      other->RefreshMetrics();
+  }
+  if (message == WM_SETTINGCHANGE || message == WM_SYSCOLORCHANGE) {
     try {
-      frame->settings_(frame->context_);
+      if (frame->settings_)
+        frame->settings_(frame->context_);
+      for (auto* other : hosted())
+        if (alive(other) && other->settings_)
+          other->settings_(other->context_);
     } catch (...) {
       OutputDebugStringW(L"KryptonUI native settings update failed\n");
     }

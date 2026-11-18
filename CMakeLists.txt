@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(KryptonUI
-  VERSION 0.1.1.2
+  VERSION 0.1.1.3
   DESCRIPTION "Krypton browser UI: one common logic layer, one native UI per platform"
   LANGUAGES C CXX)
 
@@ -32,9 +32,14 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 option(KR_BUILD_TESTS "Build the commonTest suites" ON)
 option(KR_BUILD_PREVIEW "Build the preview app for the active platform" ON)
+option(KR_RELEASE_MAX "Optimize the Windows UI with Chromium's Clang and ThinLTO" OFF)
 
 kr_resolve_platform()
 message(STATUS "KryptonUI platform: ${KR_PLATFORM}")
+
+if(KR_RELEASE_MAX)
+  include(KryptonReleaseMax)
+endif()
 
 if(KR_BUILD_TESTS)
   enable_testing()

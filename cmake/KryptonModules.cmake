@@ -43,7 +43,8 @@ endfunction()
 function(kr_compile_options target)
   if(MSVC)
     target_compile_options(${target} PRIVATE
-      /W4 /permissive- /utf-8 /Zc:__cplusplus /Zc:preprocessor /EHsc /bigobj)
+      /W4 /permissive- /utf-8 /Zc:__cplusplus
+      "$<$<CXX_COMPILER_ID:MSVC>:/Zc:preprocessor>" /EHsc /bigobj)
   else()
     target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
   endif()

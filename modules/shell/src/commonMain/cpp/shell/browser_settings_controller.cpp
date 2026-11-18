@@ -43,6 +43,45 @@ Result<void> BrowserPort::InvokeSettingsAction(std::uint64_t request,
              ? Result<void>{}
              : Fail(ErrorCode::kPlatform, "Settings action rejected");
 }
+bool BrowserPort::ManageLocalModel(LocalModelKind kind,
+                                   std::uint32_t id,
+                                   LocalModelCommand command) const {
+  return KR_HAS_SLOT(&table_, KrBrowser, manage_local_model) &&
+         table_.manage_local_model &&
+         table_.manage_local_model(table_.self, std::to_underlying(kind), id,
+                                   std::to_underlying(command)) == KR_OK;
+}
+Result<void> Shell::SetLocalModels(LocalModelsState value) {
+  const auto& settings = store_.ui().settings;
+  if (settings.open && settings.section == SettingsSection::kLanguages &&
+      store_.local_models() != value) {
+    store_.SetLocalModels(std::move(value));
+    ScheduleRender();
+  }
+  return {};
+}
+void Shell::OnLocalModelCommand(LocalModelKind kind,
+                                std::uint32_t id,
+                                LocalModelCommand command) {
+  const auto& settings = store_.ui().settings;
+  const auto& models = store_.local_models();
+  if (!settings.open || settings.section != SettingsSection::kLanguages ||
+      models.checking)
+    return;
+  const auto row = std::ranges::find_if(models.rows, [&](const auto& model) {
+    return model.kind == kind && model.id == id;
+  });
+  if (row == models.rows.end())
+    return;
+  const auto flag =
+      command == LocalModelCommand::kDownload ? LocalModelFlag::kCanDownload
+      : command == LocalModelCommand::kRemove ? LocalModelFlag::kCanRemove
+                                              : LocalModelFlag::kCanSelect;
+  if (row->flags.Has(flag) && !browser_.ManageLocalModel(kind, id, command)) {
+    store_.EditBrowserSettings().error = true;
+    ScheduleRender();
+  }
+}
 Result<void> Shell::SetBrowserSettings(BrowserSettingsSnapshot snapshot) {
   auto result = store_.EditBrowserSettings().Apply(std::move(snapshot));
   if (result)

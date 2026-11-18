@@ -6,11 +6,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "krypton/ui/platform/platform.hpp"
 
 namespace kr::win {
 TransientSurface::~TransientSurface() {
+  lifetime_.reset();
   input_target_.Reset();
   try {
     Hide();
@@ -69,24 +71,38 @@ void TransientSurface::Show(Rect client,
     bounds_ = bounds;
   }
   if (!visible_) {
-    const HWND window = Window();
     const HWND focus = GetFocus();
-    return_focus_ =
-        focus != window && !IsChild(window, focus) ? focus : nullptr;
+    if (!input_target_.Owns(focus))
+      return_focus_ = focus;
+    ++show_generation_;
     source_.SiteBridge().Show();
     visible_ = true;
   }
   Raise();
 }
 
-void TransientSurface::Hide() noexcept try {
+void TransientSurface::Hide(Task on_hidden) noexcept try {
   if (source_ && visible_) {
-    ReleaseFocus(Window(), return_focus_, parent_);
     const auto bridge = source_.SiteBridge();
-    hide_.Hide(Window(), root_.DispatcherQueue(), [bridge] { bridge.Hide(); });
+    visible_ = false;
+    hide_.Hide(Window(), root_.DispatcherQueue(),
+               [this, weak = std::weak_ptr<int>(lifetime_), bridge,
+                generation = show_generation_,
+                on_hidden = std::move(on_hidden)]() mutable {
+                 bridge.Hide();
+                 // Hiding a popup can restore XAML focus. Return it only
+                 // after that handoff, and only if this surface still owns it.
+                 if (weak.expired() || generation != show_generation_)
+                   return;
+                 ReleaseFocus(Window(), std::exchange(return_focus_, nullptr),
+                              parent_);
+                 if (on_hidden)
+                   on_hidden();
+               });
+    return;
   }
-  return_focus_ = nullptr;
-  visible_ = false;
+  if (on_hidden && !hide_.IsPending())
+    on_hidden();
 } catch (...) {
   platform::WriteDefaultLog(LogLevel::kWarning,
                             "Transient popup owner could not hide");

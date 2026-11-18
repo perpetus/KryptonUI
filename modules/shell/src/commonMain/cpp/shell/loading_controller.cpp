@@ -12,6 +12,10 @@ void Shell::OnAddressFocusChanged(bool focused) {
   if (store_.ui().address_focused == focused)
     return;
   store_.SetAddressFocused(focused);
+  if (!focused)
+    StopDictation();
+  else if (dictation_pending_focus_)
+    BeginDictation();
   NotifyAddressState();
   if (!store_.dirty().none())
     ScheduleRender();

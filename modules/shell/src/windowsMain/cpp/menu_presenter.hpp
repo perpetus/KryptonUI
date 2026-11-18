@@ -36,6 +36,7 @@ class MenuPresenter {
   void Reanchor(Rect anchor);
   void Raise() noexcept;
   [[nodiscard]] bool IsOpen() const noexcept;
+  [[nodiscard]] bool OwnsInput() const noexcept;
   [[nodiscard]] bool Contains(Point point) const noexcept;
   void SetText(UiTextView text);
   void InstallStyle(const xaml::FrameworkElement& root);

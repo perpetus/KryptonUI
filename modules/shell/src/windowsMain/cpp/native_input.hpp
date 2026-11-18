@@ -61,9 +61,9 @@ class NativeInputTarget {
   HWND window_ = nullptr;
 };
 
-// Win32 leaves keyboard focus on a child window that is hidden, so keys would
-// keep reaching invisible content. Before `content` hides, moves focus held
-// inside it to `fallback`, or to `host` when that window is gone or hidden.
+// Win32 can leave keyboard focus on a child window as it hides. Moves focus
+// held inside it to `fallback`, or to `host` when that window is gone or
+// hidden.
 void ReleaseFocus(HWND content, HWND fallback, HWND host) noexcept;
 
 // One message hook and one focus hook per UI thread, shared by its shells.
@@ -72,7 +72,7 @@ class NativeInput {
  public:
   using Preprocess = bool (*)(void*, const MSG&);
   using UnhandledKey = bool (*)(void*, const MSG&);
-  using FocusChanged = void (*)(void*, HWND);
+  using FocusChanged = void (*)(void*, HWND next, HWND previous);
 
   NativeInput() = default;
   ~NativeInput();
@@ -90,6 +90,9 @@ class NativeInput {
   // it. Forward the original queued message, not a reconstructed key packet.
   [[nodiscard]] bool ForwardUnhandledKey(std::uint32_t key) const noexcept;
   [[nodiscard]] bool Owns(HWND window) const noexcept;
+  // Shells sharing one frame register the same parent. Only the presented
+  // shell routes messages, focus notifications and ownership checks.
+  void SetEnabled(bool enabled) noexcept { enabled_ = enabled; }
 
  private:
   [[nodiscard]] static NativeInput* FindOwner(HWND window) noexcept;
@@ -106,6 +109,7 @@ class NativeInput {
   FocusChanged focused_ = nullptr;
   MSG last_key_{};
   mutable bool key_forwarded_ = false;
+  bool enabled_ = true;
 };
 
 }  // namespace kr::win

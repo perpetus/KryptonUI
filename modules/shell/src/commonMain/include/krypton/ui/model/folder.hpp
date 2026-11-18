@@ -9,6 +9,7 @@
 namespace kr {
 // Zen's default includes the root folder in its five levels.
 inline constexpr std::size_t kMaxFolderDepth = 5;
+enum class LiveFolderProvider : unsigned { kOff, kRss, kPullRequests, kIssues };
 struct Folder {
   FolderId id;
   SpaceId space;
@@ -17,6 +18,12 @@ struct Folder {
   std::string glyph;
   std::size_t order = 0;
   bool collapsed = false;
+  unsigned live_kind = 0;
+  std::string live_source;
+  unsigned live_interval_minutes = 30;
+  unsigned live_max_items = 20;
+  std::string live_status;
+  bool live_supported = false;
 };
 enum class FolderCommandKind : unsigned {
   kCreate,
@@ -27,6 +34,9 @@ enum class FolderCommandKind : unsigned {
   kUnpack,
   kDelete,
   kNewTab,
+  kSetLive,
+  kRefreshLive,
+  kRestoreLiveItems,
 };
 struct FolderCommand {
   FolderCommandKind kind = FolderCommandKind::kCreate;
@@ -38,5 +48,9 @@ struct FolderCommand {
   std::string_view name;
   std::string_view glyph;
   bool collapsed = false;
+  unsigned live_kind = 0;
+  std::string_view live_source;
+  unsigned live_interval_minutes = 30;
+  unsigned live_max_items = 20;
 };
 }  // namespace kr

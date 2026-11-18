@@ -340,6 +340,10 @@ class Worker {
       }
       std::erase_if(scenes_,
                     [](const auto& scene) { return scene->closed.load(); });
+      if (scenes_.empty()) {
+        lock.unlock();
+        gpu_.reset();
+      }
     }
     scenes_.clear();
     gpu_.reset();

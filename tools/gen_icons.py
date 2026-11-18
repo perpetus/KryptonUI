@@ -18,6 +18,7 @@ def main() -> None:
                  "site-tools-active",
                  "boost-dice", "boost-code", "boost-share", "boost-zap",
                  "boost-focus", "boost-controls", "boost-appearance", "boost-disable",
+                 "logo-github", "logo-rss",
                  "boost-close", "boost-magic", "boost-size", "boost-case",
                  "boost-uppercase", "boost-lowercase", "boost-chevron", "boost-delete"):
         # Source assets contain build-preprocessor directives and license
@@ -74,7 +75,7 @@ def main() -> None:
             raise ValueError(f"Inconsistent icon style in {name}")
         stroke = styles.pop()
         data = " ".join(paths)
-        if name.startswith("site-tools"):
+        if name.startswith("site-tools") or name.startswith("logo-"):
             # Match SVG subpath origins and arc syntax in XAML's mini-language.
             data = normalize(data)
         identifier = ''.join(part.title() for part in name.split('-'))

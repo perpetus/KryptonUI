@@ -30,6 +30,7 @@ Result<void> Shell::SetAppearancePrefs(const AppearancePrefs& prefs,
   return result;
 }
 Result<void> Shell::ShowSettings(std::optional<SettingsSection> requested) {
+  OnTabSwitcherDismissed();
   DismissBoostEditor();
   const auto section = requested.value_or(store_.ui().settings.section);
   if (OnboardingActive())

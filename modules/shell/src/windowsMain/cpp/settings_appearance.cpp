@@ -116,19 +116,6 @@ AppearanceSettings::AppearanceSettings(ViewContext& context,
     item = controls::ComboBoxItem();
     material_.Items().Append(item);
   }
-  for (auto& item : glass_modes_) {
-    item = controls::ComboBoxItem();
-    glass_.Items().Append(item);
-  }
-  groups_[0].Children().Append(Row(UiText::kSettingsGlass, glass_));
-  groups_[0].Children().Append(Text(UiText::kGlassHelp));
-  glass_changed_ =
-      glass_.SelectionChanged(winrt::auto_revoke, [this](auto&&, auto&&) {
-        if (!reconciling_ && glass_.SelectedIndex() >= 0)
-          context_.delegate.OnAppearanceEdited(
-              {AppearanceOption::kGlassMode,
-               static_cast<std::uint32_t>(glass_.SelectedIndex())});
-      });
   groups_[0].Children().Append(Row(UiText::kSettingsColorScheme, scheme_));
   groups_[0].Children().Append(Row(UiText::kSettingsMenuMaterial, material_));
   // Pack names are product names and stay untranslated.
@@ -196,6 +183,18 @@ AppearanceSettings::AppearanceSettings(ViewContext& context,
           context_.delegate.OnAppearanceEdited(
               {AppearanceOption::kNewTabBehavior,
                static_cast<std::uint32_t>(new_tab_.SelectedIndex())});
+      });
+  switcher_awake_.OnContent(winrt::box_value(L""));
+  switcher_awake_.OffContent(winrt::box_value(L""));
+  groups_[0].Children().Append(
+      Row(UiText::kTabSwitcherAwakeOnly, switcher_awake_));
+  groups_[0].Children().Append(Text(UiText::kTabSwitcherAwakeHelp));
+  switcher_awake_changed_ =
+      switcher_awake_.Toggled(winrt::auto_revoke, [this](auto&&, auto&&) {
+        if (!reconciling_)
+          context_.delegate.OnAppearanceEdited(
+              {AppearanceOption::kSwitcherAwakeOnly,
+               switcher_awake_.IsOn() ? 1u : 0u});
       });
   groups_[0].Children().Append(Text(UiText::kSettingsMenuHelp));
   groups_[1].Children().Append(Text(UiText::kHorizontalTabs));
@@ -453,15 +452,6 @@ void AppearanceSettings::Render(const ShellViewModel::SettingsVm& vm,
       entry.label.Visibility(*visible ? xaml::Visibility::Visible
                                       : xaml::Visibility::Collapsed);
   }
-  constexpr std::array glass_labels{
-      UiText::kGlassOff, UiText::kGlassPerformance, UiText::kGlassQuality};
-  for (std::size_t i = 0; i < glass_modes_.size(); ++i)
-    glass_modes_[i].Content(
-        winrt::box_value(NativeText(glass_labels[i], text)));
-  glass_.IsEnabled(vm.state.appearance_editable);
-  if (glass_.SelectedIndex() != static_cast<int>(vm.appearance.glass_mode))
-    glass_.SelectedIndex(static_cast<int>(vm.appearance.glass_mode));
-  Accessible(glass_, NativeText(UiText::kSettingsGlass, text));
   constexpr std::array search_bar_labels{UiText::kSearchBarNormal,
                                          UiText::kSearchBarFloatingOnType,
                                          UiText::kSearchBarAlwaysFloating};
@@ -492,6 +482,10 @@ void AppearanceSettings::Render(const ShellViewModel::SettingsVm& vm,
   if (new_tab_.SelectedIndex() != new_tab)
     new_tab_.SelectedIndex(new_tab);
   Accessible(new_tab_, NativeText(UiText::kSettingsNewTabBehavior, text));
+  switcher_awake_.IsEnabled(vm.state.appearance_editable);
+  switcher_awake_.IsOn(
+      vm.appearance.flags.Has(AppearanceFlag::kSwitcherAwakeOnly));
+  Accessible(switcher_awake_, NativeText(UiText::kTabSwitcherAwakeOnly, text));
   scheme_.IsEnabled(vm.state.appearance_editable);
   material_.IsEnabled(vm.state.appearance_editable);
   icon_pack_.IsEnabled(vm.state.icon_pack_editable);

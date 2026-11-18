@@ -3,6 +3,14 @@
 #include "krypton/ui/shell/shell.hpp"
 
 namespace kr::abi {
+static_assert(std::to_underlying(LiveFolderProvider::kOff) ==
+              KR_LIVE_FOLDER_NONE);
+static_assert(std::to_underlying(LiveFolderProvider::kRss) ==
+              KR_LIVE_FOLDER_RSS);
+static_assert(std::to_underlying(LiveFolderProvider::kPullRequests) ==
+              KR_LIVE_FOLDER_GITHUB_PULLS);
+static_assert(std::to_underlying(LiveFolderProvider::kIssues) ==
+              KR_LIVE_FOLDER_GITHUB_ISSUES);
 void FillFolderUi(KrShellUI& ui) noexcept {
   ui.upsert_folder = [](void* self, const KrFolder* value) noexcept {
     try {
@@ -20,6 +28,23 @@ void FillFolderUi(KrShellUI& ui) noexcept {
                             : "",
           value->order,
           value->collapsed};
+      if (KR_HAS_FIELD(value, KrFolder, live_status)) {
+        if (value->live_kind > KR_LIVE_FOLDER_GITHUB_ISSUES ||
+            value->live_source.size > 2048 || value->live_status.size > 512 ||
+            (!value->live_source.data && value->live_source.size) ||
+            (!value->live_status.data && value->live_status.size))
+          return KR_ERR_INVALID_ARGUMENT;
+        folder.live_kind = value->live_kind;
+        if (value->live_source.size)
+          folder.live_source.assign(value->live_source.data,
+                                    value->live_source.size);
+        folder.live_interval_minutes = value->live_interval_minutes;
+        folder.live_max_items = value->live_max_items;
+        if (value->live_status.size)
+          folder.live_status.assign(value->live_status.data,
+                                    value->live_status.size);
+        folder.live_supported = true;
+      }
       return static_cast<Shell*>(self)->UpsertFolder(std::move(folder))
                  ? KR_OK
                  : KR_ERR_INVALID_ARGUMENT;

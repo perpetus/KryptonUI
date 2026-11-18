@@ -18,6 +18,17 @@ using winrt::Windows::Foundation::Numerics::float2;
 FavoritesGrid::FavoritesGrid(ViewContext& context) : context_(context) {
   root_.ColumnSpacing(kTokens.spacing.favorite_gap);
   root_.RowSpacing(kTokens.spacing.favorite_gap);
+  root_.Background(context_.brushes.transparent);
+  context_menu_ = root_.RightTapped(
+      winrt::auto_revoke,
+      [this](auto&&, const xaml::Input::RightTappedRoutedEventArgs& args) {
+        const auto point = args.GetPosition(root_);
+        const auto bounds = context_.bounds(root_);
+        context_.request_menu(MenuKind::kSidebar,
+                              std::to_underlying(SidebarZone::kEssentials),
+                              {bounds.x + point.X, bounds.y + point.Y, 0, 0});
+        args.Handled(true);
+      });
 }
 
 bool FavoritesGrid::Render(const ShellViewModel& vm) {

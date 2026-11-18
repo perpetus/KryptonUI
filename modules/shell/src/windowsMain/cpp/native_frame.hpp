@@ -27,6 +27,14 @@ class NativeFrame {
                                         void* context,
                                         SettingsChanged settings,
                                         ActivationChanged activation = nullptr);
+  // A shell sharing a frame owned by another shell. Its islands pass drag
+  // regions through to that frame; it never subclasses the parent. The owning
+  // frame relays activation, metrics and settings changes.
+  [[nodiscard]] Result<void> InitializeHosted(
+      HWND parent,
+      void* context,
+      SettingsChanged settings,
+      ActivationChanged activation = nullptr);
   [[nodiscard]] Result<void> AttachIsland(HWND island);
   void Reset() noexcept;
   void Update(std::span<const Rect> draggable,
@@ -51,6 +59,7 @@ class NativeFrame {
   DragRegions drag_regions_;
   std::span<const Rect> draggable_;
   std::vector<HWND> children_;
+  bool hosted_ = false;
 };
 
 }  // namespace kr::win

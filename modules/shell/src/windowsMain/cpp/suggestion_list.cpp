@@ -58,6 +58,10 @@ struct SuggestionList::Row {
   controls::Image image{nullptr};
   controls::TextBlock glyph{nullptr};
   controls::RichTextBlock text{nullptr};
+  // Trailing "Switch to Tab" label and arrow chip for open-tab rows.
+  controls::StackPanel action{nullptr};
+  controls::TextBlock action_text{nullptr};
+  controls::TextBlock action_glyph{nullptr};
   struct StyledRun {
     xaml::Documents::Run run{nullptr};
     Flags<SuggestionTextStyle> style;
@@ -85,6 +89,7 @@ struct SuggestionList::Row {
     item.CornerRadius(UniformCorners(tokens.row_radius));
     AddColumn(content, 0, xaml::GridUnitType::Auto);
     AddColumn(content, 1, xaml::GridUnitType::Star);
+    AddColumn(content, 0, xaml::GridUnitType::Auto);
     const auto icon_host =
         content.FindName(L"SuggestionIcon").as<controls::Border>();
     icon_host.Padding(UniformThickness(tokens.icon_padding));
@@ -114,6 +119,33 @@ struct SuggestionList::Row {
     paragraph = text.Blocks().GetAt(0).as<xaml::Documents::Paragraph>();
     paragraph.Margin(UniformThickness(0));
     paragraph.Inlines().Clear();
+    action = content.FindName(L"SuggestionAction").as<controls::StackPanel>();
+    action.Spacing(tokens.action_gap);
+    action.Margin({tokens.icon_gap, 0, 0, 0});
+    action.VerticalAlignment(xaml::VerticalAlignment::Center);
+    action.Visibility(xaml::Visibility::Collapsed);
+    action_text =
+        content.FindName(L"SuggestionActionText").as<controls::TextBlock>();
+    action_text.FontFamily(
+        media::FontFamily(winrt::to_hstring(kTokens.type.family)));
+    action_text.FontSize(kTokens.type.size_small);
+    action_text.FontWeight(kSemiBold);
+    action_text.VerticalAlignment(xaml::VerticalAlignment::Center);
+    const auto chip =
+        content.FindName(L"SuggestionActionChip").as<controls::Border>();
+    chip.Width(tokens.action_chip_size);
+    chip.Height(tokens.action_chip_size);
+    chip.CornerRadius(UniformCorners(tokens.action_chip_radius));
+    chip.Background(context.brushes.pill);
+    chip.VerticalAlignment(xaml::VerticalAlignment::Center);
+    action_glyph =
+        content.FindName(L"SuggestionActionGlyph").as<controls::TextBlock>();
+    action_glyph.FontFamily(
+        media::FontFamily(winrt::to_hstring(kTokens.type.icon_family)));
+    action_glyph.FontSize(tokens.action_glyph_size);
+    action_glyph.Text(L"\uE72A");  // Forward arrow
+    action_glyph.HorizontalAlignment(xaml::HorizontalAlignment::Center);
+    action_glyph.VerticalAlignment(xaml::VerticalAlignment::Center);
   }
 };
 
@@ -184,6 +216,13 @@ SuggestionList::SuggestionList(ViewContext& context) : context_(context) {
         <RichTextBlock x:Name="SuggestionText" Grid.Column="1">
           <Paragraph><Run/><Run/><Run/></Paragraph>
         </RichTextBlock>
+        <StackPanel x:Name="SuggestionAction" Grid.Column="2"
+                    Orientation="Horizontal">
+          <TextBlock x:Name="SuggestionActionText"/>
+          <Border x:Name="SuggestionActionChip">
+            <TextBlock x:Name="SuggestionActionGlyph"/>
+          </Border>
+        </StackPanel>
       </Grid>
     </DataTemplate>)")
                          .as<xaml::DataTemplate>());
@@ -262,14 +301,25 @@ void SuggestionList::UpdateRow(Row& row) {
       }
     };
     append(record.title, record.contents_class, false);
-    if (!record.detail.empty()) {
+    // An open tab's description is its trailing action label instead.
+    if (!record.detail.empty() && !record.tab_switch) {
       append(winrt::to_hstring(kTokens.overlay.description_separator), {},
              true);
       append(record.detail, record.description_class, true);
     }
+    if (record.tab_switch && row.action_text.Text() != record.detail)
+      row.action_text.Text(record.detail);
     row.text_revision = record.text_revision;
-    xaml::Automation::AutomationProperties::SetName(row.item, record.title);
+    xaml::Automation::AutomationProperties::SetName(
+        row.item, record.tab_switch && !record.detail.empty()
+                      ? record.title + L", " + record.detail
+                      : record.title);
   }
+  const auto action_visibility = record.tab_switch
+                                     ? xaml::Visibility::Visible
+                                     : xaml::Visibility::Collapsed;
+  if (row.action.Visibility() != action_visibility)
+    row.action.Visibility(action_visibility);
   if (row.rich_image != record.rich_image) {
     const auto size = record.rich_image ? kTokens.overlay.rich_image_size
                                         : kTokens.spacing.icon_size;
@@ -301,6 +351,10 @@ void SuggestionList::UpdateRow(Row& row) {
     row.glyph.Foreground(foreground);
   const auto& detail = record.selected ? context_.brushes.search_selected_text
                                        : context_.brushes.search_description;
+  if (row.action_text.Foreground() != detail)
+    row.action_text.Foreground(detail);
+  if (row.action_glyph.Foreground() != foreground)
+    row.action_glyph.Foreground(foreground);
   for (const auto& span : row.runs) {
     const auto brush =
         !record.selected && span.style.Has(SuggestionTextStyle::kUrl)
@@ -328,7 +382,8 @@ void SuggestionList::Render(std::span<const SuggestionVm> suggestions,
         record.description != suggestion.description ||
         !std::ranges::equal(record.contents_class, suggestion.contents_class) ||
         !std::ranges::equal(record.description_class,
-                            suggestion.description_class);
+                            suggestion.description_class) ||
+        record.tab_switch != suggestion.tab_switch;
     if (text_changed) {
       record.contents_class.assign(suggestion.contents_class.begin(),
                                    suggestion.contents_class.end());
@@ -348,6 +403,7 @@ void SuggestionList::Render(std::span<const SuggestionVm> suggestions,
     }
     record.kind = suggestion.kind;
     record.rich_image = suggestion.rich_image;
+    record.tab_switch = suggestion.tab_switch;
     record.selected = static_cast<int>(index) == selection;
     record.bitmap = context_.images.Get(suggestion.icon, images);
   }

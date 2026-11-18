@@ -53,6 +53,15 @@ class NativeTitleBar {
   [[nodiscard]] Result<void> SetCaptionVisible(bool visible) noexcept;
   [[nodiscard]] bool Enabled() const noexcept { return bar_ != nullptr; }
 
+  // Shells sharing a frame never bind its caption. They follow the metrics the
+  // owning shell's title bar publishes for that frame.
+  using MetricsListener = void (*)(void* context,
+                                   const NativeTitleBarMetrics& metrics);
+  static void Listen(HWND parent, void* context, MetricsListener listener);
+  static void Unlisten(void* context) noexcept;
+  [[nodiscard]] static std::optional<NativeTitleBarMetrics> Current(
+      HWND parent) noexcept;
+
  private:
   void AllowHostFullscreen() noexcept;
   void PublishMetrics();

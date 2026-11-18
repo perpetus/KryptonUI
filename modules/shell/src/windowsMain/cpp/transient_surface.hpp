@@ -22,11 +22,15 @@ class TransientSurface {
 
   void Ensure();
   void Show(Rect client, float scale, xaml::ElementTheme theme);
-  void Hide() noexcept;
+  void Hide(Task on_hidden = {}) noexcept;
   void Raise() noexcept;
   [[nodiscard]] const controls::Grid& Root() const noexcept { return root_; }
   [[nodiscard]] Rect ClientBounds() const;
   [[nodiscard]] bool IsReady() const;
+  [[nodiscard]] bool IsClosing() const noexcept { return hide_.IsPending(); }
+  [[nodiscard]] bool Owns(HWND window) const noexcept {
+    return input_target_.Owns(window);
+  }
   // The island's child window, for frame hit testing; null before Ensure.
   [[nodiscard]] HWND Window() const noexcept;
 
@@ -34,6 +38,8 @@ class TransientSurface {
   HWND parent_;
   // Where keyboard focus was when the surface appeared; it returns there.
   HWND return_focus_ = nullptr;
+  std::uint64_t show_generation_ = 0;
+  std::shared_ptr<int> lifetime_ = std::make_shared<int>(0);
   NativeInputTarget input_target_;
   IslandHide hide_;
   xaml::Hosting::DesktopWindowXamlSource source_{nullptr};
